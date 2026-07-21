@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL")
+  directUrl = env("POSTGRES_URL_NON_POOLING")
+}
+
+enum Role {
+  INTERNAL
+  // "EXTERNAL" / "CLIENT" can be added later without a schema rewrite
+}
+
+enum NodeStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum MilestoneType {
+  RELEASE
+  LAUNCH
+  DEADLINE
+  CHECKPOINT
+  DEPRECATION
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         Role      @default(INTERNAL)
+  comments     Comment[]
+  createdAt    DateTime  @default(now())
+}
+
+// ---------- Board 1: Project Board (recursive tree) ----------
+model ProjectNode {
+  id          String        @id @default(cuid())
+  name        String
+  owner       String        @default("")
+  status      NodeStatus    @default(NOT_STARTED)
+  priority    Priority      @default(MEDIUM)
+  startDate   DateTime?
+  endDate     DateTime?
+  description String        @default("")
+  parentId    String?
+  parent      ProjectNode?  @relation("Tree", fields: [parentId], references: [id], onDelete: Cascade)
+  children    ProjectNode[] @relation("Tree")
+  comments    Comment[]
+  sortOrder   Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([parentId])
+}
+
+model Comment {
+  id        String      @id @default(cuid())
+  body      String
+  node      ProjectNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  nodeId    String
+  author    User        @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId  String
+  createdAt DateTime    @default(now())
+
+  @@index([nodeId])
+}
+
+// ---------- Board 2: Roadmap Board ----------
+model Category {
+  id        String        @id @default(cuid())
+  name      String
+  color     String        @default("#0E7A5F")
+  sortOrder Int           @default(0)
+  items     RoadmapItem[]
+}
+
+model RoadmapItem {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  startDate   DateTime
+  endDate     DateTime
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([categoryId])
+}
+
+model Milestone {
+  id          String        @id @default(cuid())
+  name        String
+  type        MilestoneType @default(RELEASE)
+  date        DateTime
+  description String        @default("")
+  createdAt   DateTime      @default(now())
+}
