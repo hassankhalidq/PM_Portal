@@ -26,12 +26,14 @@ Next.js 14 (App Router, frontend + backend via Server Actions) · Vercel Postgre
    npm install
    ```
 
-6. **Create the tables**:
+6. **Create a Blob store** (for Project board file attachments) — in the Vercel project go to Storage, create a **Blob** store, and connect it to the project. This auto-injects `BLOB_READ_WRITE_TOKEN`. Re-run `vercel env pull .env.local` afterwards if you already pulled once.
+
+7. **Create the tables**:
    ```
    npm run db:push
    ```
 
-7. **Seed the first user** (creates `admin@sahulatpay.local` / `changeme123` and a default roadmap lane):
+8. **Seed the first user** (creates `admin@sahulatpay.local` / `changeme123` and a default roadmap lane):
    ```
    npm run db:seed
    ```
@@ -40,12 +42,12 @@ Next.js 14 (App Router, frontend + backend via Server Actions) · Vercel Postgre
    SEED_ADMIN_EMAIL=you@example.com SEED_ADMIN_PASSWORD=yourStrongPassword npm run db:seed
    ```
 
-8. **Run locally**:
+9. **Run locally**:
    ```
    npm run dev
    ```
 
-9. **Deploy** — push to GitHub; Vercel builds and deploys automatically. The build script already runs `prisma generate`.
+10. **Deploy** — push to GitHub; Vercel builds and deploys automatically. The build script already runs `prisma generate`.
 
 Change the seeded password immediately if you used the default. There is deliberately no public signup; add users by inserting rows (bcrypt hash, cost 12) or re-running the seed with different env values.
 
@@ -60,6 +62,8 @@ Change the seeded password immediately if you used the default. There is deliber
 ## Using the boards
 
 **Project board** — "New project" creates a top-level project. Hover any row and press + to add a child; nesting is unlimited. Click a row to open the side panel: edit fields, delete (cascades to children), and comment. Filter by owner/status/priority; Export CSV downloads the currently visible (filtered) view.
+
+Table/Kanban toggle in the header switches between the nested list and a drag-and-drop board grouped by status (drag a card to a new column to change its status). Each item also has a progress percentage (slider in the side panel, shown as a bar on both views), an optional link field (shown as a 🔗 icon on the row, opens in a new tab), and file attachments (upload from the side panel, stored in Vercel Blob, shown with a 📎 count on the row).
 
 **Roadmap board** — "Manage lanes" creates/renames/recolors/reorders swimlanes (the last lane can't be deleted). "Add item" places a bar in a lane; "Add milestone" adds a typed marker (Release ◆, Launch flag, Deadline ■, Checkpoint ●, Deprecation ✕) on the dedicated top lane. Drag any bar or marker to reschedule; click to open its detail panel. The dashed amber seam marks the Now (monthly headers) / Later (quarterly headers) boundary; the zoom slider widens or narrows the day scale.
 

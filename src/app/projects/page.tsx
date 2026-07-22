@@ -14,6 +14,7 @@ export default async function ProjectsPage() {
         orderBy: { createdAt: "asc" },
         include: { author: { select: { name: true } } },
       },
+      attachments: { orderBy: { createdAt: "asc" } },
     },
   });
 
@@ -23,6 +24,8 @@ export default async function ProjectsPage() {
     owner: n.owner,
     status: n.status,
     priority: n.priority,
+    progress: n.progress,
+    link: n.link,
     startDate: n.startDate ? n.startDate.toISOString().slice(0, 10) : null,
     endDate: n.endDate ? n.endDate.toISOString().slice(0, 10) : null,
     description: n.description,
@@ -32,6 +35,12 @@ export default async function ProjectsPage() {
       body: c.body,
       author: c.author.name,
       createdAt: c.createdAt.toISOString(),
+    })),
+    attachments: n.attachments.map((a) => ({
+      id: a.id,
+      name: a.name,
+      url: a.url,
+      size: a.size,
     })),
   }));
 

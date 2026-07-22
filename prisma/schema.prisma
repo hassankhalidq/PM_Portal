@@ -4,8 +4,8 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("POSTGRES_PRISMA_URL")
-  directUrl = env("POSTGRES_URL_NON_POOLING")
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 enum Role {
@@ -51,6 +51,8 @@ model ProjectNode {
   owner       String        @default("")
   status      NodeStatus    @default(NOT_STARTED)
   priority    Priority      @default(MEDIUM)
+  progress    Int           @default(0)
+  link        String        @default("")
   startDate   DateTime?
   endDate     DateTime?
   description String        @default("")
@@ -58,11 +60,24 @@ model ProjectNode {
   parent      ProjectNode?  @relation("Tree", fields: [parentId], references: [id], onDelete: Cascade)
   children    ProjectNode[] @relation("Tree")
   comments    Comment[]
+  attachments Attachment[]
   sortOrder   Int           @default(0)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   @@index([parentId])
+}
+
+model Attachment {
+  id        String      @id @default(cuid())
+  name      String
+  url       String
+  size      Int
+  node      ProjectNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  nodeId    String
+  createdAt DateTime    @default(now())
+
+  @@index([nodeId])
 }
 
 model Comment {

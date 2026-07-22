@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { addComment, createNode, deleteNode, updateNode } from "@/lib/actions";
+import { useMemo, useRef, useState, useTransition } from "react";
+import { addComment, createNode, deleteAttachment, deleteNode, updateNode, uploadAttachment } from "@/lib/actions";
 
 type CommentT = { id: string; body: string; author: string; createdAt: string };
+type AttachmentT = { id: string; name: string; url: string; size: number };
 
 export type NodeT = {
   id: string;
@@ -11,11 +12,14 @@ export type NodeT = {
   owner: string;
   status: "NOT_STARTED" | "IN_PROGRESS" | "BLOCKED" | "DONE";
   priority: "LOW" | "MEDIUM" | "HIGH";
+  progress: number;
+  link: string;
   startDate: string | null;
   endDate: string | null;
   description: string;
   parentId: string | null;
   comments: CommentT[];
+  attachments: AttachmentT[];
 };
 
 const STATUS_META: Record<NodeT["status"], { label: string; cls: string }> = {
@@ -31,6 +35,23 @@ const PRIORITY_META: Record<NodeT["priority"], { label: string; cls: string }> =
   HIGH: { label: "High", cls: "bg-red-100 text-red-700" },
 };
 
+function fmtSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ProgressBar({ value, className = "" }: { value: number; className?: string }) {
+  return (
+    <div className={`h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-line ${className}`}>
+      <div
+        className="h-full rounded-full bg-primary"
+        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+      />
+    </div>
+  );
+}
+
 function fmtDate(d: string | null) {
   if (!d) return "—";
   return new Date(d + "T00:00:00").toLocaleDateString("en-GB", {
@@ -41,6 +62,7 @@ function fmtDate(d: string | null) {
 }
 
 export default function ProjectBoard({ nodes }: { nodes: NodeT[] }) {
+  const [view, setView] = useState<"table" | "kanban">("table");
   const [filters, setFilters] = useState({ owner: "", status: "", priority: "" });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -95,7 +117,9 @@ export default function ProjectBoard({ nodes }: { nodes: NodeT[] }) {
     });
 
   const exportCsv = () => {
-    const rows: string[][] = [["Item", "Depth", "Owner", "Status", "Priority", "Start", "End"]];
+    const rows: string[][] = [
+      ["Item", "Depth", "Owner", "Status", "Priority", "Progress", "Link", "Start", "End"],
+    ];
     const walk = (id: string, depth: number) => {
       if (!visible.has(id)) return;
       const n = byId.get(id)!;
@@ -105,6 +129,8 @@ export default function ProjectBoard({ nodes }: { nodes: NodeT[] }) {
         n.owner,
         STATUS_META[n.status].label,
         PRIORITY_META[n.priority].label,
+        `${n.progress}%`,
+        n.link,
         n.startDate ?? "",
         n.endDate ?? "",
       ]);
@@ -173,6 +199,24 @@ export default function ProjectBoard({ nodes }: { nodes: NodeT[] }) {
             </option>
           ))}
         </select>
+        <div className="flex rounded-lg border border-line p-0.5">
+          <button
+            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              view === "table" ? "bg-primary-soft text-primary-deep" : "text-muted"
+            }`}
+            onClick={() => setView("table")}
+          >
+            Table
+          </button>
+          <button
+            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              view === "kanban" ? "bg-primary-soft text-primary-deep" : "text-muted"
+            }`}
+            onClick={() => setView("kanban")}
+          >
+            Kanban
+          </button>
+        </div>
         <button className="btn-ghost" onClick={exportCsv}>
           Export CSV
         </button>
@@ -181,42 +225,50 @@ export default function ProjectBoard({ nodes }: { nodes: NodeT[] }) {
         </button>
       </header>
 
-      <div className="flex-1 overflow-auto px-6 py-5">
-        {creatingRoot && (
-          <InlineCreate
-            placeholder="Project name"
-            onDone={() => setCreatingRoot(false)}
-            parentId={null}
-          />
-        )}
-        {(byParent.get(null) ?? []).filter((r) => visible.has(r.id)).length === 0 &&
-        !creatingRoot ? (
-          <div className="mt-16 text-center text-sm text-muted">
-            {filterActive
-              ? "No items match the current filters."
-              : "No projects yet. Create your first project to start the breakdown."}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {(byParent.get(null) ?? [])
-              .filter((r) => visible.has(r.id))
-              .map((root) => (
-                <div key={root.id} className="rounded-xl border border-line bg-surface shadow-card">
-                  <Row
-                    node={root}
-                    depth={0}
-                    byParent={byParent}
-                    visible={visible}
-                    collapsed={collapsed}
-                    toggle={toggle}
-                    onSelect={setSelectedId}
-                    selectedId={selectedId}
-                  />
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
+      {view === "table" ? (
+        <div className="flex-1 overflow-auto px-6 py-5">
+          {creatingRoot && (
+            <InlineCreate
+              placeholder="Project name"
+              onDone={() => setCreatingRoot(false)}
+              parentId={null}
+            />
+          )}
+          {(byParent.get(null) ?? []).filter((r) => visible.has(r.id)).length === 0 &&
+          !creatingRoot ? (
+            <div className="mt-16 text-center text-sm text-muted">
+              {filterActive
+                ? "No items match the current filters."
+                : "No projects yet. Create your first project to start the breakdown."}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {(byParent.get(null) ?? [])
+                .filter((r) => visible.has(r.id))
+                .map((root) => (
+                  <div key={root.id} className="rounded-xl border border-line bg-surface shadow-card">
+                    <Row
+                      node={root}
+                      depth={0}
+                      byParent={byParent}
+                      visible={visible}
+                      collapsed={collapsed}
+                      toggle={toggle}
+                      onSelect={setSelectedId}
+                      selectedId={selectedId}
+                    />
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <KanbanBoard
+          nodes={nodes.filter((n) => visible.has(n.id))}
+          onSelect={setSelectedId}
+          filterActive={filterActive}
+        />
+      )}
 
       {selected && (
         <SidePanel
@@ -289,6 +341,27 @@ function Row({
         <span className={`chip w-20 justify-center ${PRIORITY_META[node.priority].cls}`}>
           {PRIORITY_META[node.priority].label}
         </span>
+        <span className="hidden items-center gap-1.5 sm:flex">
+          <ProgressBar value={node.progress} />
+          <span className="w-8 text-right text-xs tabular-nums text-muted">{node.progress}%</span>
+        </span>
+        {node.link && (
+          <a
+            href={node.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={node.link}
+            className="focus-ring shrink-0 text-muted hover:text-primary"
+          >
+            🔗
+          </a>
+        )}
+        {node.attachments.length > 0 && (
+          <span className="shrink-0 text-xs text-muted" title={`${node.attachments.length} attachment(s)`}>
+            📎 {node.attachments.length}
+          </span>
+        )}
         <span className="hidden w-36 text-right text-xs tabular-nums text-muted lg:block">
           {fmtDate(node.startDate)} → {fmtDate(node.endDate)}
         </span>
@@ -391,12 +464,16 @@ function SidePanel({
     owner: node.owner,
     status: node.status,
     priority: node.priority,
+    progress: node.progress,
+    link: node.link,
     startDate: node.startDate ?? "",
     endDate: node.endDate ?? "",
     description: node.description,
   });
   const [comment, setComment] = useState("");
   const [pending, start] = useTransition();
+  const [uploadError, setUploadError] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const save = () =>
     start(async () => {
@@ -405,11 +482,29 @@ function SidePanel({
         owner: form.owner,
         status: form.status,
         priority: form.priority,
+        progress: form.progress,
+        link: form.link,
         startDate: form.startDate || null,
         endDate: form.endDate || null,
         description: form.description,
       });
     });
+
+  const pickFile = () => fileInput.current?.click();
+
+  const onFileChosen = (file: File | undefined) => {
+    if (!file) return;
+    setUploadError("");
+    const fd = new FormData();
+    fd.set("file", file);
+    start(async () => {
+      const res = await uploadAttachment(node.id, fd);
+      if (res?.error) setUploadError(res.error);
+    });
+    if (fileInput.current) fileInput.current.value = "";
+  };
+
+  const removeAttachment = (id: string) => start(() => deleteAttachment(id));
 
   const remove = () => {
     if (!confirm("Delete this item and everything nested under it?")) return;
@@ -500,6 +595,30 @@ function SidePanel({
           </div>
         </div>
         <div>
+          <div className="mb-1 flex items-center justify-between">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">Progress</label>
+            <span className="text-xs font-medium tabular-nums">{form.progress}%</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={form.progress}
+            onChange={(e) => setForm({ ...form, progress: Number(e.target.value) })}
+            className="w-full accent-primary"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Link</label>
+          <input
+            className="field"
+            placeholder="https://..."
+            value={form.link}
+            onChange={(e) => setForm({ ...form, link: e.target.value })}
+          />
+        </div>
+        <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Description</label>
           <textarea
             className="field min-h-24"
@@ -514,6 +633,51 @@ function SidePanel({
           <button className="btn-ghost text-red-600" onClick={remove} disabled={pending}>
             Delete
           </button>
+        </div>
+
+        <div className="border-t border-line pt-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Attachments ({node.attachments.length})
+            </h3>
+            <button className="text-xs font-medium text-primary hover:underline" onClick={pickFile} disabled={pending}>
+              + Add file
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              className="hidden"
+              onChange={(e) => onFileChosen(e.target.files?.[0])}
+            />
+          </div>
+          {uploadError && <p className="mb-2 text-sm text-red-600">{uploadError}</p>}
+          <div className="space-y-2">
+            {node.attachments.length === 0 && (
+              <p className="text-sm text-muted">No files attached yet.</p>
+            )}
+            {node.attachments.map((a) => (
+              <div key={a.id} className="flex items-center gap-2 rounded-lg bg-canvas px-3 py-2">
+                <span className="shrink-0">📎</span>
+                <a
+                  href={a.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="min-w-0 flex-1 truncate text-sm text-primary hover:underline"
+                >
+                  {a.name}
+                </a>
+                <span className="shrink-0 text-xs text-muted">{fmtSize(a.size)}</span>
+                <button
+                  aria-label="Remove attachment"
+                  className="shrink-0 text-xs text-muted hover:text-red-600"
+                  onClick={() => removeAttachment(a.id)}
+                  disabled={pending}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="border-t border-line pt-4">
@@ -548,5 +712,95 @@ function SidePanel({
         </div>
       </div>
     </aside>
+  );
+}
+
+function KanbanBoard({
+  nodes,
+  onSelect,
+  filterActive,
+}: {
+  nodes: NodeT[];
+  onSelect: (id: string) => void;
+  filterActive: boolean;
+}) {
+  const [, start] = useTransition();
+  const [dragOverStatus, setDragOverStatus] = useState<NodeT["status"] | null>(null);
+  const statuses = Object.keys(STATUS_META) as NodeT["status"][];
+
+  const byStatus = useMemo(() => {
+    const map = new Map<NodeT["status"], NodeT[]>();
+    for (const s of statuses) map.set(s, []);
+    for (const n of nodes) map.get(n.status)?.push(n);
+    return map;
+  }, [nodes]);
+
+  const onDrop = (status: NodeT["status"], id: string) => {
+    setDragOverStatus(null);
+    start(() => updateNode(id, { status }));
+  };
+
+  if (nodes.length === 0) {
+    return (
+      <div className="mt-16 text-center text-sm text-muted">
+        {filterActive ? "No items match the current filters." : "No items yet."}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-x-auto px-6 py-5">
+      <div className="flex min-w-max gap-4">
+        {statuses.map((status) => (
+          <div
+            key={status}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOverStatus(status);
+            }}
+            onDragLeave={() => setDragOverStatus((s) => (s === status ? null : s))}
+            onDrop={(e) => {
+              e.preventDefault();
+              const id = e.dataTransfer.getData("text/node-id");
+              if (id) onDrop(status, id);
+            }}
+            className={`w-64 shrink-0 rounded-xl border bg-canvas/60 p-2 ${
+              dragOverStatus === status ? "border-primary" : "border-line"
+            }`}
+          >
+            <div className="mb-2 flex items-center justify-between px-1.5 py-1">
+              <span className={`chip ${STATUS_META[status].cls}`}>{STATUS_META[status].label}</span>
+              <span className="text-xs text-muted">{byStatus.get(status)?.length ?? 0}</span>
+            </div>
+            <div className="space-y-2">
+              {byStatus.get(status)?.map((n) => (
+                <button
+                  key={n.id}
+                  draggable
+                  onDragStart={(e) => e.dataTransfer.setData("text/node-id", n.id)}
+                  onClick={() => onSelect(n.id)}
+                  className="focus-ring block w-full cursor-grab rounded-lg border border-line bg-surface p-3 text-left shadow-card active:cursor-grabbing"
+                >
+                  <p className="truncate text-sm font-medium">{n.name}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className={`chip ${PRIORITY_META[n.priority].cls}`}>
+                      {PRIORITY_META[n.priority].label}
+                    </span>
+                    {n.owner && <span className="truncate text-xs text-muted">{n.owner}</span>}
+                  </div>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <ProgressBar value={n.progress} />
+                    <span className="text-[11px] tabular-nums text-muted">{n.progress}%</span>
+                  </div>
+                </button>
+              ))}
+              {(byStatus.get(status)?.length ?? 0) === 0 && (
+                <p className="px-1.5 py-2 text-xs text-muted">Drop items here</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -52,6 +52,8 @@ export async function updateNode(
     owner?: string;
     status?: NodeStatus;
     priority?: Priority;
+    progress?: number;
+    link?: string;
     startDate?: string | null;
     endDate?: string | null;
     description?: string;
@@ -65,6 +67,10 @@ export async function updateNode(
       ...(data.owner !== undefined ? { owner: data.owner.trim() } : {}),
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.priority !== undefined ? { priority: data.priority } : {}),
+      ...(data.progress !== undefined
+        ? { progress: Math.max(0, Math.min(100, Math.round(data.progress))) }
+        : {}),
+      ...(data.link !== undefined ? { link: data.link.trim() } : {}),
       ...(data.startDate !== undefined
         ? { startDate: data.startDate ? new Date(data.startDate) : null }
         : {}),
@@ -74,6 +80,36 @@ export async function updateNode(
       ...(data.description !== undefined ? { description: data.description } : {}),
     },
   });
+  revalidatePath("/projects");
+}
+
+// ---------- Attachments ----------
+export async function uploadAttachment(nodeId: string, formData: FormData) {
+  await requireSession();
+  const file = formData.get("file") as File | null;
+  if (!file || file.size === 0) return { error: "No file selected." };
+  if (file.size > 10 * 1024 * 1024) return { error: "File must be under 10MB." };
+
+  const { put } = await import("@vercel/blob");
+  const blob = await put(`attachments/${nodeId}/${Date.now()}-${file.name}`, file, {
+    access: "public",
+  });
+
+  await prisma.attachment.create({
+    data: { nodeId, name: file.name, url: blob.url, size: file.size },
+  });
+  revalidatePath("/projects");
+  return { error: null };
+}
+
+export async function deleteAttachment(id: string) {
+  await requireSession();
+  const attachment = await prisma.attachment.findUnique({ where: { id } });
+  if (attachment) {
+    const { del } = await import("@vercel/blob");
+    await del(attachment.url).catch(() => {});
+  }
+  await prisma.attachment.delete({ where: { id } });
   revalidatePath("/projects");
 }
 
