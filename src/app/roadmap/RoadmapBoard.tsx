@@ -2,17 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
+  applyRoadmapTheme,
   createCategory,
   createItem,
   createMilestone,
+  createRoadmap,
   deleteCategory,
   deleteItem,
   deleteMilestone,
+  deleteRoadmap,
   moveCategory,
+  reorderItems,
+  renameRoadmap,
   updateCategory,
   updateItem,
   updateMilestone,
 } from "@/lib/actions";
+import EntitySwitcher from "@/components/EntitySwitcher";
+import { ROADMAP_THEMES } from "@/lib/roadmapThemes";
+import { formatDateRange, HoverCardContent, useHoverCard } from "./HoverCard";
 
 type ItemT = {
   id: string;
@@ -31,16 +39,17 @@ type MilestoneT = {
   date: string;
   description: string;
 };
+type RoadmapT = { id: string; name: string; isDefault: boolean };
 
 const DAY = 86400000;
 const MILESTONE_META: Record<MilestoneType, { label: string; color: string }> = {
-  RELEASE: { label: "Release", color: "#E8A13C" },
-  LAUNCH: { label: "Launch", color: "#0E7A5F" },
+  RELEASE: { label: "Release", color: "#D97706" },
+  LAUNCH: { label: "Launch", color: "#16A34A" },
   DEADLINE: { label: "Deadline", color: "#DC2626" },
   CHECKPOINT: { label: "Checkpoint", color: "#2563EB" },
-  DEPRECATION: { label: "Deprecation", color: "#64748B" },
+  DEPRECATION: { label: "Deprecation", color: "#71717A" },
 };
-const SWATCHES = ["#0E7A5F", "#2563EB", "#7C3AED", "#DB2777", "#E8A13C", "#475569"];
+const SWATCHES = ["#4F46E5", "#0284C7", "#7C3AED", "#DB2777", "#D97706", "#475569"];
 
 const parse = (s: string) => Date.parse(s + "T00:00:00Z");
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
@@ -54,42 +63,34 @@ const addMonths = (t: number, m: number) => {
 };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function MilestoneIcon({ type, size = 14 }: { type: MilestoneType; size?: number }) {
-  const c = MILESTONE_META[type].color;
-  const s = size;
+function MilestoneGlyph({ type, c }: { type: MilestoneType; c: string }) {
   switch (type) {
     case "RELEASE":
-      return (
-        <svg width={s} height={s} viewBox="0 0 14 14" aria-hidden>
-          <rect x="3.5" y="3.5" width="7" height="7" transform="rotate(45 7 7)" fill={c} />
-        </svg>
-      );
+      return <rect x="8.5" y="8.5" width="7" height="7" transform="rotate(45 12 12)" fill={c} />;
     case "LAUNCH":
       return (
-        <svg width={s} height={s} viewBox="0 0 14 14" aria-hidden>
-          <path d="M4 1v12" stroke={c} strokeWidth="1.6" strokeLinecap="round" />
-          <path d="M4 2h7l-2 2.5L11 7H4z" fill={c} />
-        </svg>
+        <>
+          <path d="M9 5.5v13" stroke={c} strokeWidth="1.4" strokeLinecap="round" />
+          <path d="M9 6.5h7l-2.3 3L16 12.5H9z" fill={c} />
+        </>
       );
     case "DEADLINE":
-      return (
-        <svg width={s} height={s} viewBox="0 0 14 14" aria-hidden>
-          <rect x="2.5" y="2.5" width="9" height="9" rx="1" fill={c} />
-        </svg>
-      );
+      return <rect x="7.5" y="7.5" width="9" height="9" rx="1" fill={c} />;
     case "CHECKPOINT":
-      return (
-        <svg width={s} height={s} viewBox="0 0 14 14" aria-hidden>
-          <circle cx="7" cy="7" r="4.5" fill={c} />
-        </svg>
-      );
+      return <circle cx="12" cy="12" r="4.5" fill={c} />;
     case "DEPRECATION":
-      return (
-        <svg width={s} height={s} viewBox="0 0 14 14" aria-hidden>
-          <path d="M3 3l8 8M11 3l-8 8" stroke={c} strokeWidth="2.2" strokeLinecap="round" />
-        </svg>
-      );
+      return <path d="M8 8l8 8M16 8l-8 8" stroke={c} strokeWidth="2" strokeLinecap="round" />;
   }
+}
+
+function MilestoneIcon({ type, size = 16 }: { type: MilestoneType; size?: number }) {
+  const c = MILESTONE_META[type].color;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <circle cx="12" cy="12" r="11" fill={c} fillOpacity="0.12" />
+      <MilestoneGlyph type={type} c={c} />
+    </svg>
+  );
 }
 
 type Panel =
@@ -100,10 +101,30 @@ type Panel =
   | { kind: "lanes" }
   | null;
 
+type ZoomBand = "quarterly" | "mixed" | "monthly";
+
+type DragState =
+  | { kind: "milestone"; id: string; startX: number; origDate: number; moved: boolean }
+  | {
+      kind: "item-move" | "item-resize-start" | "item-resize-end";
+      id: string;
+      startX: number;
+      origStart: number;
+      origEnd: number;
+      moved: boolean;
+    }
+  | { kind: "item-reorder"; id: string; categoryId: string; startY: number; origIndex: number; moved: boolean };
+
 export default function RoadmapBoard({
+  roadmaps,
+  currentRoadmapId,
+  currentTheme,
   categories,
   milestones,
 }: {
+  roadmaps: RoadmapT[];
+  currentRoadmapId: string;
+  currentTheme: string;
   categories: CategoryT[];
   milestones: MilestoneT[];
 }) {
@@ -113,6 +134,27 @@ export default function RoadmapBoard({
   const [overrides, setOverrides] = useState<Record<string, { start: number; end: number }>>({});
   useEffect(() => setOverrides({}), [categories, milestones]);
 
+  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
+  const [hiddenTypes, setHiddenTypes] = useState<Set<MilestoneType>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const [reorderDrag, setReorderDrag] = useState<{ id: string; deltaY: number } | null>(null);
+
+  const toggleCategory = (id: string) =>
+    setHiddenCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const toggleType = (t: MilestoneType) =>
+    setHiddenTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+
   const allItems = useMemo(() => categories.flatMap((c) => c.items), [categories]);
 
   const today = useMemo(() => {
@@ -120,7 +162,9 @@ export default function RoadmapBoard({
     return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
   }, []);
 
-  // "Now" window = current quarter + next quarter (monthly headers); beyond = "Later" (quarterly).
+  const zoomBand: ZoomBand = pxPerDay <= 5 ? "quarterly" : pxPerDay <= 8 ? "mixed" : "monthly";
+
+  // "Now" window = current quarter + next quarter (monthly headers); beyond = "Later" (quarterly). Mixed band only.
   const seam = useMemo(() => addMonths(startOfQuarter(today), 6), [today]);
 
   const [rangeStart, rangeEnd] = useMemo(() => {
@@ -144,6 +188,29 @@ export default function RoadmapBoard({
   const headerSegments = useMemo(() => {
     const segs: { label: string; from: number; to: number; zone: "now" | "later" }[] = [];
     let cursor = rangeStart;
+
+    if (zoomBand === "quarterly") {
+      while (cursor < rangeEnd) {
+        const qStart = startOfQuarter(cursor);
+        const next = Math.min(addMonths(qStart, 3), rangeEnd);
+        const d = new Date(qStart);
+        segs.push({ label: `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`, from: cursor, to: next, zone: "later" });
+        cursor = next;
+      }
+      return segs;
+    }
+
+    if (zoomBand === "monthly") {
+      while (cursor < rangeEnd) {
+        const next = Math.min(addMonths(cursor, 1), rangeEnd);
+        const d = new Date(cursor);
+        segs.push({ label: `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`, from: cursor, to: next, zone: "now" });
+        cursor = next;
+      }
+      return segs;
+    }
+
+    // "mixed" band — existing now/later behavior.
     while (cursor < rangeEnd) {
       if (cursor < seam) {
         const next = Math.min(addMonths(cursor, 1), rangeEnd);
@@ -169,60 +236,165 @@ export default function RoadmapBoard({
       }
     }
     return segs;
-  }, [rangeStart, rangeEnd, seam]);
+  }, [rangeStart, rangeEnd, seam, zoomBand]);
 
   // ---- drag handling ----
-  const drag = useRef<{
-    id: string;
-    kind: "item" | "milestone";
-    startX: number;
-    origStart: number;
-    origEnd: number;
-    moved: boolean;
-  } | null>(null);
+  const drag = useRef<DragState | null>(null);
   const [, startTransition] = useTransition();
 
-  const beginDrag = (
+  const beginMilestoneDrag = (e: React.PointerEvent, id: string, origDate: number) => {
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag.current = { kind: "milestone", id, startX: e.clientX, origDate, moved: false };
+    setIsDragging(true);
+  };
+
+  const beginItemMove = (e: React.PointerEvent, id: string, origStart: number, origEnd: number) => {
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag.current = { kind: "item-move", id, startX: e.clientX, origStart, origEnd, moved: false };
+    setIsDragging(true);
+  };
+
+  const beginItemResize = (
     e: React.PointerEvent,
-    kind: "item" | "milestone",
+    edge: "start" | "end",
     id: string,
     origStart: number,
     origEnd: number
   ) => {
-    (e.target as Element).setPointerCapture(e.pointerId);
-    drag.current = { id, kind, startX: e.clientX, origStart, origEnd, moved: false };
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag.current = { kind: edge === "start" ? "item-resize-start" : "item-resize-end", id, startX: e.clientX, origStart, origEnd, moved: false };
+    setIsDragging(true);
+  };
+
+  const beginReorder = (e: React.PointerEvent, id: string, categoryId: string, index: number) => {
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag.current = { kind: "item-reorder", id, categoryId, startY: e.clientY, origIndex: index, moved: false };
+    setIsDragging(true);
   };
 
   const onDragMove = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d) return;
-    const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-    if (deltaDays !== 0) d.moved = true;
-    setOverrides((o) => ({
-      ...o,
-      [d.id]: { start: d.origStart + deltaDays * DAY, end: d.origEnd + deltaDays * DAY },
-    }));
+
+    if (d.kind === "milestone") {
+      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      if (deltaDays !== 0) d.moved = true;
+      setOverrides((o) => ({ ...o, [d.id]: { start: d.origDate + deltaDays * DAY, end: d.origDate + deltaDays * DAY } }));
+      return;
+    }
+    if (d.kind === "item-move") {
+      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      if (deltaDays !== 0) d.moved = true;
+      setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart + deltaDays * DAY, end: d.origEnd + deltaDays * DAY } }));
+      return;
+    }
+    if (d.kind === "item-resize-start") {
+      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      if (deltaDays !== 0) d.moved = true;
+      const newStart = Math.min(d.origStart + deltaDays * DAY, d.origEnd - DAY);
+      setOverrides((o) => ({ ...o, [d.id]: { start: newStart, end: d.origEnd } }));
+      return;
+    }
+    if (d.kind === "item-resize-end") {
+      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      if (deltaDays !== 0) d.moved = true;
+      const newEnd = Math.max(d.origEnd + deltaDays * DAY, d.origStart + DAY);
+      setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart, end: newEnd } }));
+      return;
+    }
+    if (d.kind === "item-reorder") {
+      const deltaY = e.clientY - d.startY;
+      if (Math.abs(deltaY) > 2) d.moved = true;
+      setReorderDrag({ id: d.id, deltaY });
+    }
   };
 
   const endDrag = (e: React.PointerEvent) => {
     const d = drag.current;
     drag.current = null;
+    setIsDragging(false);
     if (!d) return;
-    const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-    if (!d.moved || deltaDays === 0) {
-      setOverrides((o) => {
-        const { [d.id]: _, ...rest } = o;
-        return rest;
+
+    if (d.kind === "milestone") {
+      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      if (!d.moved || deltaDays === 0) {
+        setOverrides((o) => {
+          const { [d.id]: _, ...rest } = o;
+          return rest;
+        });
+        setPanel({ kind: "milestone", id: d.id });
+        return;
+      }
+      const newDate = iso(d.origDate + deltaDays * DAY);
+      startTransition(async () => {
+        try {
+          await updateMilestone(d.id, { date: newDate });
+        } catch {
+          setOverrides((o) => {
+            const { [d.id]: _, ...rest } = o;
+            return rest;
+          });
+        }
       });
-      setPanel({ kind: d.kind, id: d.id });
       return;
     }
-    const newStart = iso(d.origStart + deltaDays * DAY);
-    const newEnd = iso(d.origEnd + deltaDays * DAY);
-    startTransition(async () => {
-      if (d.kind === "item") await updateItem(d.id, { startDate: newStart, endDate: newEnd });
-      else await updateMilestone(d.id, { date: newStart });
-    });
+
+    if (d.kind === "item-move" || d.kind === "item-resize-start" || d.kind === "item-resize-end") {
+      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      if (!d.moved || deltaDays === 0) {
+        setOverrides((o) => {
+          const { [d.id]: _, ...rest } = o;
+          return rest;
+        });
+        setPanel({ kind: "item", id: d.id });
+        return;
+      }
+      let newStart = d.origStart;
+      let newEnd = d.origEnd;
+      if (d.kind === "item-move") {
+        newStart += deltaDays * DAY;
+        newEnd += deltaDays * DAY;
+      } else if (d.kind === "item-resize-start") {
+        newStart = Math.min(d.origStart + deltaDays * DAY, d.origEnd - DAY);
+      } else {
+        newEnd = Math.max(d.origEnd + deltaDays * DAY, d.origStart + DAY);
+      }
+      startTransition(async () => {
+        try {
+          await updateItem(d.id, { startDate: iso(newStart), endDate: iso(newEnd) });
+        } catch {
+          setOverrides((o) => {
+            const { [d.id]: _, ...rest } = o;
+            return rest;
+          });
+        }
+      });
+      return;
+    }
+
+    if (d.kind === "item-reorder") {
+      setReorderDrag(null);
+      if (!d.moved) {
+        setPanel({ kind: "item", id: d.id });
+        return;
+      }
+      const category = categories.find((c) => c.id === d.categoryId);
+      if (!category) return;
+      const deltaY = e.clientY - d.startY;
+      const rawIndex = d.origIndex + Math.round(deltaY / 38);
+      const clamped = Math.max(0, Math.min(category.items.length - 1, rawIndex));
+      if (clamped !== d.origIndex) {
+        const reordered = [...category.items];
+        const [moved] = reordered.splice(d.origIndex, 1);
+        reordered.splice(clamped, 0, moved);
+        // No local optimistic order state to revert here (the transient
+        // drag offset above is already cleared) — the list simply stays in
+        // its last-known-good order if this fails, matching current data.
+        startTransition(() => reorderItems(d.categoryId, reordered.map((i) => i.id)).catch(() => {}));
+      }
+    }
   };
 
   const itemDates = (i: ItemT) =>
@@ -234,16 +406,28 @@ export default function RoadmapBoard({
   const selectedMs =
     panel?.kind === "milestone" ? milestones.find((m) => m.id === panel.id) ?? null : null;
 
+  const activeTheme = ROADMAP_THEMES[currentTheme] ?? ROADMAP_THEMES.indigo;
+
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-6 py-4">
-        <div className="mr-auto">
-          <h1 className="font-display text-xl font-600">Roadmap board</h1>
-          <p className="text-xs text-muted">
-            {categories.length} lanes · {allItems.length} items · {milestones.length} milestones
-          </p>
+      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-6 py-4">
+        <div className="mr-auto flex items-center gap-3">
+          <div>
+            <h1 className="text-xl font-semibold">Product</h1>
+            <p className="figure text-xs text-text-muted">
+              {categories.length} lanes · {allItems.length} items · {milestones.length} milestones
+            </p>
+          </div>
+          <EntitySwitcher
+            label="Roadmap"
+            entities={roadmaps}
+            currentId={currentRoadmapId}
+            paramName="roadmap"
+            basePath="/roadmap"
+            actions={{ create: createRoadmap, rename: renameRoadmap, remove: deleteRoadmap }}
+          />
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted">
+        <label className="flex items-center gap-2 text-xs text-text-muted">
           Zoom
           <input
             type="range"
@@ -270,102 +454,123 @@ export default function RoadmapBoard({
         </button>
       </header>
 
-      <div className="flex-1 overflow-auto">
+      <div className="roadmap-content flex-1 overflow-auto" style={{ ["--roadmap-tint" as string]: activeTheme.bgTint }}>
         <div className="min-w-max">
           {/* Header rail */}
-          <div className="sticky top-0 z-20 flex border-b border-line bg-surface">
-            <div className="sticky left-0 z-30 w-44 shrink-0 border-r border-line bg-surface px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
+          <div className="sticky top-0 z-20 flex border-b border-border bg-surface">
+            <div className="sticky left-0 z-30 w-44 shrink-0 border-r border-border bg-surface px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-text-muted">
               Timeline
             </div>
             <div className="relative h-9" style={{ width }}>
               {headerSegments.map((s) => (
                 <div
                   key={s.from}
-                  className={`absolute top-0 flex h-full items-center border-r border-line px-2 text-xs font-medium ${
-                    s.zone === "now" ? "text-ink" : "bg-canvas text-muted"
+                  className={`figure absolute top-0 flex h-full items-center border-r border-border px-2 text-xs font-medium ${
+                    s.zone === "now" ? "text-text" : "bg-bg text-text-muted"
                   }`}
                   style={{ left: x(s.from), width: x(s.to) - x(s.from) }}
                 >
                   {s.label}
                 </div>
               ))}
-              <div
-                className="absolute top-0 h-full border-l-2 border-dashed border-saffron"
-                style={{ left: x(seam) }}
-                title="Now / Later boundary"
-              />
+              {zoomBand === "mixed" && (
+                <div
+                  className="absolute top-0 h-full border-l-2 border-dashed border-warning"
+                  style={{ left: x(seam) }}
+                  title="Now / Later boundary"
+                />
+              )}
             </div>
           </div>
 
           {/* Milestone lane */}
-          <div className="flex border-b border-line bg-saffron-soft/40">
-            <div className="sticky left-0 z-10 flex w-44 shrink-0 items-center border-r border-line bg-surface px-4 py-3">
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-muted">
+          <div className="flex border-b border-border bg-warning/5">
+            <div className="sticky left-0 z-10 flex w-44 shrink-0 items-center border-r border-border bg-surface px-4 py-3">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">
                 Milestones
               </span>
             </div>
             <div className="relative h-12" style={{ width }}>
+              <GridLines segments={headerSegments} x={x} />
               <TodayLine x={x(today)} />
+              <span
+                className="figure absolute -top-1 z-20 -translate-x-1/2 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-semibold text-white"
+                style={{ left: x(today) }}
+              >
+                Today
+              </span>
               {milestones.map((m) => (
-                <button
+                <MilestoneMarker
                   key={m.id}
-                  className="focus-ring absolute top-1/2 z-10 flex -translate-y-1/2 cursor-grab touch-none items-center gap-1 rounded-md px-1 py-0.5 hover:bg-surface active:cursor-grabbing"
-                  style={{ left: x(msDate(m)) - 7 }}
-                  onPointerDown={(e) => beginDrag(e, "milestone", m.id, msDate(m), msDate(m))}
-                  onPointerMove={onDragMove}
-                  onPointerUp={endDrag}
-                  title={`${MILESTONE_META[m.type].label}: ${m.name}`}
-                >
-                  <MilestoneIcon type={m.type} />
-                  <span className="max-w-40 truncate text-[11px] font-medium">{m.name}</span>
-                </button>
+                  milestone={m}
+                  date={msDate(m)}
+                  x={x}
+                  hidden={hiddenTypes.has(m.type)}
+                  isDragging={isDragging}
+                  onBeginDrag={beginMilestoneDrag}
+                  onDragMove={onDragMove}
+                  onEndDrag={endDrag}
+                />
               ))}
             </div>
           </div>
 
           {/* Category swimlanes */}
           {categories.map((c) => (
-            <div key={c.id} className="flex border-b border-line/70">
-              <div
-                className="sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-line bg-surface px-4"
-                style={{ minHeight: Math.max(56, c.items.length * 34 + 22) }}
+            <div
+              key={c.id}
+              className={`flex border-b border-border/70 ${
+                hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""
+              }`}
+            >
+              <button
+                onClick={() => toggleCategory(c.id)}
+                title="Click to show/hide this lane"
+                className="sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border bg-surface px-4 text-left hover:bg-bg"
+                style={{ minHeight: Math.max(56, c.items.length * 38 + 22) }}
               >
                 <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: c.color }} />
-                <span className="truncate text-sm font-medium">{c.name}</span>
-              </div>
+                <span
+                  className={`truncate text-sm font-medium ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
+                >
+                  {c.name}
+                </span>
+              </button>
               <div
                 className="relative"
-                style={{ width, minHeight: Math.max(56, c.items.length * 34 + 22) }}
+                style={{ width, minHeight: Math.max(56, c.items.length * 38 + 22) }}
               >
-                <div
-                  className="absolute inset-y-0 border-l-2 border-dashed border-saffron/60"
-                  style={{ left: x(seam) }}
-                />
+                <GridLines segments={headerSegments} x={x} />
+                {zoomBand === "mixed" && (
+                  <div
+                    className="absolute inset-y-0 border-l-2 border-dashed border-warning/60"
+                    style={{ left: x(seam) }}
+                  />
+                )}
                 <TodayLine x={x(today)} />
-                {c.items.map((i, idx) => {
-                  const d = itemDates(i);
-                  const left = x(d.start);
-                  const w = Math.max(x(d.end + DAY) - left, 14);
-                  return (
-                    <button
-                      key={i.id}
-                      className="focus-ring absolute z-10 flex h-6 cursor-grab touch-none items-center overflow-hidden rounded-full px-2.5 text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
-                      style={{ left, width: w, top: 12 + idx * 34, background: c.color }}
-                      onPointerDown={(e) => beginDrag(e, "item", i.id, d.start, d.end)}
-                      onPointerMove={onDragMove}
-                      onPointerUp={endDrag}
-                      title={i.name}
-                    >
-                      <span className="truncate">{i.name}</span>
-                    </button>
-                  );
-                })}
+                {c.items.map((i, idx) => (
+                  <ItemBar
+                    key={i.id}
+                    item={i}
+                    idx={idx}
+                    color={c.color}
+                    d={itemDates(i)}
+                    x={x}
+                    isDragging={isDragging}
+                    dragY={reorderDrag?.id === i.id ? reorderDrag.deltaY : 0}
+                    onBeginMove={beginItemMove}
+                    onBeginResize={beginItemResize}
+                    onBeginReorder={beginReorder}
+                    onDragMove={onDragMove}
+                    onEndDrag={endDrag}
+                  />
+                ))}
               </div>
             </div>
           ))}
 
           {categories.length === 0 && (
-            <div className="p-10 text-center text-sm text-muted">
+            <div className="p-10 text-center text-sm text-text-muted">
               No lanes yet. Open Manage lanes to create your first category.
             </div>
           )}
@@ -373,18 +578,23 @@ export default function RoadmapBoard({
       </div>
 
       {/* Legend */}
-      <footer className="flex flex-wrap items-center gap-4 border-t border-line bg-surface px-6 py-2 text-[11px] text-muted">
+      <footer className="flex flex-wrap items-center gap-4 border-t border-border bg-surface px-6 py-2 text-[11px] text-text-muted">
         {(Object.keys(MILESTONE_META) as MilestoneType[]).map((t) => (
-          <span key={t} className="flex items-center gap-1">
+          <button
+            key={t}
+            onClick={() => toggleType(t)}
+            title="Click to show/hide this milestone type"
+            className={`flex items-center gap-1 ${hiddenTypes.has(t) ? "opacity-40 line-through" : ""}`}
+          >
             <MilestoneIcon type={t} size={12} /> {MILESTONE_META[t].label}
-          </span>
+          </button>
         ))}
         <span className="ml-auto">Drag a bar or marker to reschedule · click to open details</span>
       </footer>
 
       {panel?.kind === "lanes" && (
         <PanelFrame title="Manage lanes" onClose={() => setPanel(null)}>
-          <LaneManager categories={categories} />
+          <LaneManager categories={categories} roadmapId={currentRoadmapId} currentTheme={currentTheme} />
         </PanelFrame>
       )}
       {panel?.kind === "new-item" && (
@@ -399,25 +609,162 @@ export default function RoadmapBoard({
       )}
       {panel?.kind === "new-milestone" && (
         <PanelFrame title="Add milestone" onClose={() => setPanel(null)}>
-          <MilestoneForm onDone={() => setPanel(null)} />
+          <MilestoneForm roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
         </PanelFrame>
       )}
       {selectedMs && (
         <PanelFrame key={selectedMs.id} title="Milestone" onClose={() => setPanel(null)}>
-          <MilestoneForm milestone={selectedMs} onDone={() => setPanel(null)} />
+          <MilestoneForm milestone={selectedMs} roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
         </PanelFrame>
       )}
     </div>
   );
 }
 
+function ItemBar({
+  item,
+  idx,
+  color,
+  d,
+  x,
+  isDragging,
+  dragY,
+  onBeginMove,
+  onBeginResize,
+  onBeginReorder,
+  onDragMove,
+  onEndDrag,
+}: {
+  item: ItemT;
+  idx: number;
+  color: string;
+  d: { start: number; end: number };
+  x: (t: number) => number;
+  isDragging: boolean;
+  dragY: number;
+  onBeginMove: (e: React.PointerEvent, id: string, origStart: number, origEnd: number) => void;
+  onBeginResize: (e: React.PointerEvent, edge: "start" | "end", id: string, origStart: number, origEnd: number) => void;
+  onBeginReorder: (e: React.PointerEvent, id: string, categoryId: string, index: number) => void;
+  onDragMove: (e: React.PointerEvent) => void;
+  onEndDrag: (e: React.PointerEvent) => void;
+}) {
+  const hover = useHoverCard(isDragging);
+  const left = x(d.start);
+  const w = Math.max(x(d.end + DAY) - left, 14);
+
+  return (
+    <div
+      className="group absolute"
+      style={{ left: left - 14, width: w + 14, top: 12 + idx * 38 + dragY }}
+      onMouseEnter={hover.onMouseEnter}
+      onMouseLeave={hover.onMouseLeave}
+    >
+      <div
+        className="absolute left-0 top-0 flex h-7 w-3.5 cursor-grab touch-none items-center justify-center text-text-muted opacity-0 group-hover:opacity-60 active:cursor-grabbing"
+        onPointerDown={(e) => onBeginReorder(e, item.id, item.categoryId, idx)}
+        onPointerMove={onDragMove}
+        onPointerUp={onEndDrag}
+      >
+        ⠿
+      </div>
+      <button
+        className="absolute top-0 z-10 h-7 cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
+        style={{ left: 14, width: w, background: color }}
+        onPointerDown={(e) => onBeginMove(e, item.id, d.start, d.end)}
+        onPointerMove={onDragMove}
+        onPointerUp={onEndDrag}
+      >
+        <div
+          className="absolute left-0 top-0 z-10 h-full w-2 cursor-ew-resize"
+          onPointerDown={(e) => onBeginResize(e, "start", item.id, d.start, d.end)}
+          onPointerMove={onDragMove}
+          onPointerUp={onEndDrag}
+        />
+        <span className="block truncate px-2.5">{item.name}</span>
+        <div
+          className="absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize"
+          onPointerDown={(e) => onBeginResize(e, "end", item.id, d.start, d.end)}
+          onPointerMove={onDragMove}
+          onPointerUp={onEndDrag}
+        />
+      </button>
+      {hover.visible && (
+        <HoverCardContent
+          title={item.name}
+          dateRange={formatDateRange(iso(d.start), iso(d.end))}
+          description={item.description}
+        />
+      )}
+    </div>
+  );
+}
+
+function MilestoneMarker({
+  milestone,
+  date,
+  x,
+  hidden,
+  isDragging,
+  onBeginDrag,
+  onDragMove,
+  onEndDrag,
+}: {
+  milestone: MilestoneT;
+  date: number;
+  x: (t: number) => number;
+  hidden: boolean;
+  isDragging: boolean;
+  onBeginDrag: (e: React.PointerEvent, id: string, origDate: number) => void;
+  onDragMove: (e: React.PointerEvent) => void;
+  onEndDrag: (e: React.PointerEvent) => void;
+}) {
+  const hover = useHoverCard(isDragging);
+  return (
+    <button
+      className={`focus-ring absolute top-1/2 z-10 flex -translate-y-1/2 cursor-grab touch-none items-center gap-1 rounded-md px-1 py-0.5 hover:bg-surface active:cursor-grabbing ${
+        hidden ? "pointer-events-none opacity-20" : ""
+      }`}
+      style={{ left: x(date) - 7 }}
+      onPointerDown={(e) => onBeginDrag(e, milestone.id, date)}
+      onPointerMove={onDragMove}
+      onPointerUp={onEndDrag}
+      onMouseEnter={hover.onMouseEnter}
+      onMouseLeave={hover.onMouseLeave}
+    >
+      <MilestoneIcon type={milestone.type} />
+      <span className="max-w-40 truncate text-[11px] font-medium">{milestone.name}</span>
+      {hover.visible && (
+        <HoverCardContent
+          title={`${MILESTONE_META[milestone.type].label}: ${milestone.name}`}
+          dateRange={new Date(date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}
+          description={milestone.description}
+        />
+      )}
+    </button>
+  );
+}
+
 function TodayLine({ x }: { x: number }) {
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 border-l border-primary/50"
+      className="pointer-events-none absolute inset-y-0 border-l border-accent/50"
       style={{ left: x }}
       aria-hidden
     />
+  );
+}
+
+// Persistent vertical month/quarter gridlines, reusing the header's own
+// segment boundaries. Rendered per-row (milestone lane + each swimlane) to
+// match this file's existing pattern of duplicating TodayLine/the seam line
+// per row, rather than restructuring the layout into one global overlay.
+function GridLines({ segments, x }: { segments: { from: number }[]; x: (t: number) => number }) {
+  return (
+    <div className="pointer-events-none absolute inset-y-0 left-0 right-0" aria-hidden>
+      {segments.slice(1).map((s) => (
+        <div key={s.from} className="absolute inset-y-0 border-l border-border/60" style={{ left: x(s.from) }} />
+      ))}
+    </div>
   );
 }
 
@@ -431,9 +778,9 @@ function PanelFrame({
   children: React.ReactNode;
 }) {
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-line bg-surface shadow-panel">
-      <div className="flex items-center justify-between border-b border-line px-5 py-4">
-        <h2 className="font-display text-base font-600">{title}</h2>
+    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-lg">
+      <div className="flex items-center justify-between border-b border-border px-5 py-4">
+        <h2 className="text-base font-semibold">{title}</h2>
         <button aria-label="Close panel" className="btn-ghost h-8 w-8 justify-center p-0" onClick={onClose}>
           ✕
         </button>
@@ -479,11 +826,11 @@ function ItemForm({
   return (
     <div className="space-y-4">
       <div>
-        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Name</label>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Name</label>
         <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
       <div>
-        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Lane</label>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Lane</label>
         <select
           className="field"
           value={form.categoryId}
@@ -498,26 +845,26 @@ function ItemForm({
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Start</label>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Start</label>
           <input
             type="date"
-            className="field"
+            className="field font-mono tabular-nums"
             value={form.startDate}
             onChange={(e) => setForm({ ...form, startDate: e.target.value })}
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">End</label>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">End</label>
           <input
             type="date"
-            className="field"
+            className="field font-mono tabular-nums"
             value={form.endDate}
             onChange={(e) => setForm({ ...form, endDate: e.target.value })}
           />
         </div>
       </div>
       <div>
-        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Description</label>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Description</label>
         <textarea
           className="field min-h-24"
           value={form.description}
@@ -529,7 +876,7 @@ function ItemForm({
           {pending ? "Saving..." : item ? "Save changes" : "Add item"}
         </button>
         {item && (
-          <button className="btn-ghost text-red-600" onClick={remove} disabled={pending}>
+          <button className="btn-ghost text-danger" onClick={remove} disabled={pending}>
             Delete
           </button>
         )}
@@ -538,7 +885,15 @@ function ItemForm({
   );
 }
 
-function MilestoneForm({ milestone, onDone }: { milestone?: MilestoneT; onDone: () => void }) {
+function MilestoneForm({
+  milestone,
+  roadmapId,
+  onDone,
+}: {
+  milestone?: MilestoneT;
+  roadmapId: string;
+  onDone: () => void;
+}) {
   const [form, setForm] = useState({
     name: milestone?.name ?? "",
     type: milestone?.type ?? ("RELEASE" as MilestoneType),
@@ -550,7 +905,7 @@ function MilestoneForm({ milestone, onDone }: { milestone?: MilestoneT; onDone: 
   const save = () =>
     start(async () => {
       if (milestone) await updateMilestone(milestone.id, form);
-      else await createMilestone(form);
+      else await createMilestone({ ...form, roadmapId });
       onDone();
     });
 
@@ -565,12 +920,12 @@ function MilestoneForm({ milestone, onDone }: { milestone?: MilestoneT; onDone: 
   return (
     <div className="space-y-4">
       <div>
-        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Name</label>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Name</label>
         <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Type</label>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Type</label>
           <select
             className="field"
             value={form.type}
@@ -584,20 +939,20 @@ function MilestoneForm({ milestone, onDone }: { milestone?: MilestoneT; onDone: 
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Date</label>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Date</label>
           <input
             type="date"
-            className="field"
+            className="field font-mono tabular-nums"
             value={form.date}
             onChange={(e) => setForm({ ...form, date: e.target.value })}
           />
         </div>
       </div>
-      <div className="flex items-center gap-2 rounded-lg bg-canvas px-3 py-2 text-xs text-muted">
+      <div className="flex items-center gap-2 rounded-lg bg-bg px-3 py-2 text-xs text-text-muted">
         <MilestoneIcon type={form.type} /> Shown on the milestone lane as this marker.
       </div>
       <div>
-        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Description</label>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Description</label>
         <textarea
           className="field min-h-24"
           value={form.description}
@@ -609,7 +964,7 @@ function MilestoneForm({ milestone, onDone }: { milestone?: MilestoneT; onDone: 
           {pending ? "Saving..." : milestone ? "Save changes" : "Add milestone"}
         </button>
         {milestone && (
-          <button className="btn-ghost text-red-600" onClick={remove} disabled={pending}>
+          <button className="btn-ghost text-danger" onClick={remove} disabled={pending}>
             Delete
           </button>
         )}
@@ -618,7 +973,37 @@ function MilestoneForm({ milestone, onDone }: { milestone?: MilestoneT; onDone: 
   );
 }
 
-function LaneManager({ categories }: { categories: CategoryT[] }) {
+function ThemePicker({ roadmapId, currentTheme }: { roadmapId: string; currentTheme: string }) {
+  const [pending, start] = useTransition();
+  return (
+    <div className="border-t border-border pt-4">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">Theme</h3>
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(ROADMAP_THEMES).map(([key, t]) => (
+          <button
+            key={key}
+            title={t.label}
+            aria-label={`Apply ${t.label} theme`}
+            disabled={pending}
+            className={`h-8 w-8 rounded-full ring-offset-2 ${currentTheme === key ? "ring-2 ring-accent" : ""}`}
+            style={{ background: t.accent }}
+            onClick={() => start(() => applyRoadmapTheme(roadmapId, key))}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LaneManager({
+  categories,
+  roadmapId,
+  currentTheme,
+}: {
+  categories: CategoryT[];
+  roadmapId: string;
+  currentTheme: string;
+}) {
   const [name, setName] = useState("");
   const [color, setColor] = useState(SWATCHES[0]);
   const [pending, start] = useTransition();
@@ -638,9 +1023,9 @@ function LaneManager({ categories }: { categories: CategoryT[] }) {
           />
         ))}
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="border-t border-line pt-4">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">New lane</h3>
+      {error && <p className="text-sm text-danger">{error}</p>}
+      <div className="border-t border-border pt-4">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">New lane</h3>
         <div className="space-y-3">
           <input
             className="field"
@@ -653,7 +1038,7 @@ function LaneManager({ categories }: { categories: CategoryT[] }) {
               <button
                 key={s}
                 aria-label={`Use color ${s}`}
-                className={`focus-ring h-7 w-7 rounded-md ${color === s ? "ring-2 ring-ink ring-offset-1" : ""}`}
+                className={`focus-ring h-7 w-7 rounded-md ${color === s ? "ring-2 ring-text ring-offset-1" : ""}`}
                 style={{ background: s }}
                 onClick={() => setColor(s)}
               />
@@ -664,7 +1049,7 @@ function LaneManager({ categories }: { categories: CategoryT[] }) {
             disabled={pending || !name.trim()}
             onClick={() =>
               start(async () => {
-                await createCategory(name, color);
+                await createCategory(name, color, roadmapId);
                 setName("");
               })
             }
@@ -673,6 +1058,7 @@ function LaneManager({ categories }: { categories: CategoryT[] }) {
           </button>
         </div>
       </div>
+      <ThemePicker roadmapId={roadmapId} currentTheme={currentTheme} />
     </div>
   );
 }
@@ -694,7 +1080,7 @@ function LaneRow({
   const [pending, start] = useTransition();
 
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-line px-3 py-2">
+    <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2">
       <input
         aria-label="Lane color"
         type="color"
@@ -728,7 +1114,7 @@ function LaneRow({
         ↓
       </button>
       <button
-        className="btn-ghost h-7 w-7 justify-center p-0 text-red-600"
+        className="btn-ghost h-7 w-7 justify-center p-0 text-danger"
         disabled={onlyOne || pending}
         aria-label="Delete lane"
         title={onlyOne ? "At least one lane must exist" : "Delete lane and its items"}

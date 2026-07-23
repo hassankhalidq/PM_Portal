@@ -1,25 +1,32 @@
 import type { Config } from "tailwindcss";
 
+// Tailwind's runtime accepts a callback here (used to support the `/opacity`
+// modifier on a CSS-var-backed color), but its TS types only declare string
+// values — the cast reflects what Tailwind actually does at build time.
+function withOpacity(rgbVar: string): string {
+  return (({ opacityValue }: { opacityValue?: string }) =>
+    opacityValue === undefined ? `rgb(var(${rgbVar}))` : `rgb(var(${rgbVar}) / ${opacityValue})`) as unknown as string;
+}
+
 const config: Config = {
+  darkMode: "class",
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        canvas: "#F6F7F5",
-        surface: "#FFFFFF",
-        ink: "#101B17",
-        muted: "#5C6B64",
-        line: "#E4E8E4",
-        primary: { DEFAULT: "#0E7A5F", soft: "#E3F2EC", deep: "#0A5C48" },
-        saffron: { DEFAULT: "#E8A13C", soft: "#FBF0DD" },
+        bg: "var(--bg)",
+        surface: "var(--surface)",
+        text: { DEFAULT: "var(--text)", muted: withOpacity("--text-muted-rgb") },
+        border: "var(--border)",
+        accent: { DEFAULT: withOpacity("--accent-rgb"), hover: "var(--accent-hover)" },
+        success: withOpacity("--success-rgb"),
+        danger: withOpacity("--danger-rgb"),
+        info: withOpacity("--info-rgb"),
+        warning: withOpacity("--warning-rgb"),
       },
       fontFamily: {
-        display: ['"Space Grotesk"', "system-ui", "sans-serif"],
-        body: ["Inter", "system-ui", "sans-serif"],
-      },
-      boxShadow: {
-        card: "0 1px 2px rgba(16,27,23,0.06), 0 4px 16px rgba(16,27,23,0.05)",
-        panel: "-8px 0 32px rgba(16,27,23,0.10)",
+        sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["var(--font-geist-mono)", "ui-monospace", "monospace"],
       },
     },
   },

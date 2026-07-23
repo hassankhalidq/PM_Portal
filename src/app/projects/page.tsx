@@ -5,18 +5,34 @@ import ProjectBoard from "./ProjectBoard";
 
 export const dynamic = "force-dynamic";
 
-export default async function ProjectsPage() {
+export default async function ProjectsPage({
+  searchParams,
+}: {
+  searchParams: { board?: string | string[] };
+}) {
   const session = await auth();
-  const nodes = await prisma.projectNode.findMany({
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-    include: {
-      comments: {
-        orderBy: { createdAt: "asc" },
-        include: { author: { select: { name: true } } },
-      },
-      attachments: { orderBy: { createdAt: "asc" } },
-    },
-  });
+  const role = (session?.user as { role?: string } | undefined)?.role;
+
+  const boards = await prisma.board.findMany({ orderBy: { createdAt: "asc" } });
+  const boardParam = Array.isArray(searchParams.board) ? searchParams.board[0] : searchParams.board;
+  const currentBoard =
+    (boardParam ? boards.find((b) => b.id === boardParam) : undefined) ??
+    boards.find((b) => b.isDefault) ??
+    boards[0];
+
+  const nodes = currentBoard
+    ? await prisma.projectNode.findMany({
+        where: { boardId: currentBoard.id },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        include: {
+          comments: {
+            orderBy: { createdAt: "asc" },
+            include: { author: { select: { name: true } } },
+          },
+          attachments: { orderBy: { createdAt: "asc" } },
+        },
+      })
+    : [];
 
   const serialized = nodes.map((n) => ({
     id: n.id,
@@ -45,8 +61,12 @@ export default async function ProjectsPage() {
   }));
 
   return (
-    <Shell active="projects" userName={session?.user?.name ?? ""}>
-      <ProjectBoard nodes={serialized} />
+    <Shell active="projects" userName={session?.user?.name ?? ""} role={role}>
+      <ProjectBoard
+        nodes={serialized}
+        boards={boards.map((b) => ({ id: b.id, name: b.name, isDefault: b.isDefault }))}
+        currentBoardId={currentBoard?.id ?? ""}
+      />
     </Shell>
   );
 }

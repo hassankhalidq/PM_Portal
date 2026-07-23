@@ -9,6 +9,7 @@ datasource db {
 }
 
 enum Role {
+  ADMIN
   INTERNAL
   // "EXTERNAL" / "CLIENT" can be added later without a schema rewrite
 }
@@ -44,6 +45,14 @@ model User {
   createdAt    DateTime  @default(now())
 }
 
+model Board {
+  id        String        @id @default(cuid())
+  name      String
+  isDefault Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  nodes     ProjectNode[]
+}
+
 // ---------- Board 1: Project Board (recursive tree) ----------
 model ProjectNode {
   id          String        @id @default(cuid())
@@ -62,10 +71,13 @@ model ProjectNode {
   comments    Comment[]
   attachments Attachment[]
   sortOrder   Int           @default(0)
+  board       Board?        @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  boardId     String?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   @@index([parentId])
+  @@index([boardId])
 }
 
 model Attachment {
@@ -92,13 +104,27 @@ model Comment {
   @@index([nodeId])
 }
 
+model Roadmap {
+  id         String        @id @default(cuid())
+  name       String
+  theme      String        @default("indigo")
+  isDefault  Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  categories Category[]
+  milestones Milestone[]
+}
+
 // ---------- Board 2: Roadmap Board ----------
 model Category {
-  id        String        @id @default(cuid())
-  name      String
-  color     String        @default("#0E7A5F")
-  sortOrder Int           @default(0)
-  items     RoadmapItem[]
+  id         String        @id @default(cuid())
+  name       String
+  color      String        @default("#0E7A5F")
+  sortOrder  Int           @default(0)
+  items      RoadmapItem[]
+  roadmap    Roadmap?      @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  roadmapId  String?
+
+  @@index([roadmapId])
 }
 
 model RoadmapItem {
@@ -109,6 +135,7 @@ model RoadmapItem {
   endDate     DateTime
   category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   categoryId  String
+  sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -122,4 +149,8 @@ model Milestone {
   date        DateTime
   description String        @default("")
   createdAt   DateTime      @default(now())
+  roadmap     Roadmap?      @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  roadmapId   String?
+
+  @@index([roadmapId])
 }

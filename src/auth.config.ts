@@ -13,7 +13,12 @@ export const authConfig = {
         if (isLoggedIn) return Response.redirect(new URL("/projects", request.nextUrl));
         return true;
       }
-      return isLoggedIn;
+      if (!isLoggedIn) return false;
+      if (request.nextUrl.pathname.startsWith("/admin")) {
+        const role = (auth!.user as { role?: string }).role;
+        if (role !== "ADMIN") return Response.redirect(new URL("/projects", request.nextUrl));
+      }
+      return true;
     },
     jwt({ token, user }) {
       if (user) {

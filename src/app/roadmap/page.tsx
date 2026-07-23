@@ -5,19 +5,38 @@ import RoadmapBoard from "./RoadmapBoard";
 
 export const dynamic = "force-dynamic";
 
-export default async function RoadmapPage() {
+export default async function RoadmapPage({
+  searchParams,
+}: {
+  searchParams: { roadmap?: string | string[] };
+}) {
   const session = await auth();
-  const [categories, milestones] = await Promise.all([
-    prisma.category.findMany({
-      orderBy: { sortOrder: "asc" },
-      include: { items: { orderBy: { startDate: "asc" } } },
-    }),
-    prisma.milestone.findMany({ orderBy: { date: "asc" } }),
-  ]);
+  const role = (session?.user as { role?: string } | undefined)?.role;
+
+  const roadmaps = await prisma.roadmap.findMany({ orderBy: { createdAt: "asc" } });
+  const roadmapParam = Array.isArray(searchParams.roadmap) ? searchParams.roadmap[0] : searchParams.roadmap;
+  const currentRoadmap =
+    (roadmapParam ? roadmaps.find((r) => r.id === roadmapParam) : undefined) ??
+    roadmaps.find((r) => r.isDefault) ??
+    roadmaps[0];
+
+  const [categories, milestones] = currentRoadmap
+    ? await Promise.all([
+        prisma.category.findMany({
+          where: { roadmapId: currentRoadmap.id },
+          orderBy: { sortOrder: "asc" },
+          include: { items: { orderBy: [{ sortOrder: "asc" }, { startDate: "asc" }] } },
+        }),
+        prisma.milestone.findMany({ where: { roadmapId: currentRoadmap.id }, orderBy: { date: "asc" } }),
+      ])
+    : [[], []];
 
   return (
-    <Shell active="roadmap" userName={session?.user?.name ?? ""}>
+    <Shell active="roadmap" userName={session?.user?.name ?? ""} role={role}>
       <RoadmapBoard
+        roadmaps={roadmaps.map((r) => ({ id: r.id, name: r.name, isDefault: r.isDefault }))}
+        currentRoadmapId={currentRoadmap?.id ?? ""}
+        currentTheme={currentRoadmap?.theme ?? "indigo"}
         categories={categories.map((c) => ({
           id: c.id,
           name: c.name,

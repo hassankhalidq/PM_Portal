@@ -4,14 +4,40 @@
 
 :root {
   color-scheme: light;
+  --bg: #FAFAFA;
+  --surface: #FFFFFF;
+  --text: #18181B;
+  --border: #E4E4E7;
+  --accent-hover: #4338CA;
+  --text-muted-rgb: 113 113 122;
+  --accent-rgb: 79 70 229;
+  --success-rgb: 22 163 74;
+  --danger-rgb: 220 38 38;
+  --info-rgb: 37 99 235;
+  --warning-rgb: 217 119 6;
+}
+
+.dark {
+  color-scheme: dark;
+  --bg: #0B0B0F;
+  --surface: #151519;
+  --text: #F4F4F5;
+  --border: #27272A;
+  --accent-hover: #A5B4FC;
+  --text-muted-rgb: 161 161 170;
+  --accent-rgb: 129 140 248;
+  --success-rgb: 34 197 94;
+  --danger-rgb: 248 113 113;
+  --info-rgb: 96 165 250;
+  --warning-rgb: 251 191 36;
 }
 
 body {
-  @apply bg-canvas text-ink font-body antialiased;
+  @apply bg-bg text-text font-sans antialiased;
 }
 
 ::selection {
-  background: #cde9df;
+  background: rgb(var(--accent-rgb) / 0.25);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -22,11 +48,11 @@ body {
 }
 
 .focus-ring {
-  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1;
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1;
 }
 
 .field {
-  @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted/60 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary;
+  @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-muted/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
 }
 
 .btn {
@@ -34,13 +60,25 @@ body {
 }
 
 .btn-primary {
-  @apply btn bg-primary text-white hover:bg-primary-deep;
+  @apply btn bg-accent text-white hover:bg-accent-hover;
 }
 
 .btn-ghost {
-  @apply btn border border-line bg-surface text-ink hover:bg-canvas;
+  @apply btn border border-border bg-transparent text-text hover:bg-bg;
 }
 
-.chip {
-  @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide;
+.badge {
+  @apply inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider;
+}
+
+.figure {
+  @apply font-mono tabular-nums;
+}
+
+.roadmap-content {
+  background-color: var(--roadmap-tint, var(--bg));
+}
+
+.dark .roadmap-content {
+  background-color: var(--bg) !important;
 }
