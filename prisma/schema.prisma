@@ -46,11 +46,12 @@ model User {
 }
 
 model Board {
-  id        String        @id @default(cuid())
-  name      String
-  isDefault Boolean       @default(false)
-  createdAt DateTime      @default(now())
-  nodes     ProjectNode[]
+  id          String        @id @default(cuid())
+  name        String
+  description String        @default("")
+  isDefault   Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  nodes       ProjectNode[]
 }
 
 // ---------- Board 1: Project Board (recursive tree) ----------
@@ -105,13 +106,14 @@ model Comment {
 }
 
 model Roadmap {
-  id         String        @id @default(cuid())
-  name       String
-  theme      String        @default("indigo")
-  isDefault  Boolean       @default(false)
-  createdAt  DateTime      @default(now())
-  categories Category[]
-  milestones Milestone[]
+  id          String        @id @default(cuid())
+  name        String
+  description String        @default("")
+  theme       String        @default("indigo")
+  isDefault   Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  categories  Category[]
+  milestones  Milestone[]
 }
 
 // ---------- Board 2: Roadmap Board ----------

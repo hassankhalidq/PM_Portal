@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { createUser, deleteUser, updateUserRole } from "@/lib/actions";
 
 type Role = "ADMIN" | "INTERNAL";
@@ -21,6 +21,15 @@ export default function UsersBoard({
   const [error, setError] = useState("");
   const admins = users.filter((u) => u.role === "ADMIN").length;
 
+  useEffect(() => {
+    if (!creating) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCreating(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [creating]);
+
   return (
     <div className="flex h-screen flex-col">
       <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-6 py-4">
@@ -36,7 +45,6 @@ export default function UsersBoard({
       </header>
       <div className="flex-1 overflow-auto px-6 py-5">
         {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-        {creating && <NewUserForm onDone={() => setCreating(false)} onError={setError} />}
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
           <div className="grid grid-cols-[1fr_1fr_140px_100px_44px] border-b border-border bg-bg px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
             <span>Name</span>
@@ -56,6 +64,23 @@ export default function UsersBoard({
           ))}
         </div>
       </div>
+
+      {creating && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
+          onClick={() => setCreating(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-user-title"
+            className="w-full max-w-[440px] rounded-2xl bg-surface shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <NewUserForm onDone={() => setCreating(false)} onError={setError} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -147,45 +172,73 @@ function NewUserForm({ onDone, onError }: { onDone: () => void; onError: (s: str
   };
 
   return (
-    <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
-      <input
-        className="field"
-        placeholder="Full name"
-        value={form.name}
-        onChange={(e) => setForm({ ...form, name: e.target.value })}
-      />
-      <input
-        className="field"
-        placeholder="Email"
-        type="email"
-        value={form.email}
-        onChange={(e) => setForm({ ...form, email: e.target.value })}
-      />
-      <input
-        className="field"
-        placeholder="Temporary password"
-        type="password"
-        value={form.password}
-        onChange={(e) => setForm({ ...form, password: e.target.value })}
-      />
-      <select
-        className="field"
-        value={form.role}
-        onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
-      >
-        <option value="INTERNAL">Internal</option>
-        <option value="ADMIN">Admin</option>
-      </select>
-      <div className="col-span-2 flex gap-2">
+    <div>
+      <div className="flex items-center justify-between border-b border-border px-5 py-4">
+        <h2 id="add-user-title" className="text-base font-semibold">Add user</h2>
+        <button
+          aria-label="Close"
+          className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-bg"
+          onClick={onDone}
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex flex-col gap-4 p-5">
+        <div>
+          <label className="mb-1 block text-[13px] font-medium">Full name</label>
+          <input
+            autoFocus
+            className="field"
+            placeholder="e.g. Ayesha Raza"
+            autoComplete="off"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[13px] font-medium">Email</label>
+          <input
+            className="field"
+            placeholder="name@sahulatpay.com"
+            type="email"
+            autoComplete="off"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[13px] font-medium">Temporary password</label>
+          <input
+            className="field"
+            placeholder="At least 8 characters"
+            type="password"
+            autoComplete="new-password"
+            value={form.password}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[13px] font-medium">Role</label>
+          <select
+            className="field"
+            value={form.role}
+            onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
+          >
+            <option value="INTERNAL">Internal</option>
+            <option value="ADMIN">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
+        <button className="btn-ghost" onClick={onDone} disabled={pending}>
+          Cancel
+        </button>
         <button
           className="btn-primary"
           onClick={submit}
           disabled={pending || !form.name.trim() || !form.email.trim() || form.password.length < 8}
         >
           {pending ? "Creating..." : "Create user"}
-        </button>
-        <button className="btn-ghost" onClick={onDone} disabled={pending}>
-          Cancel
         </button>
       </div>
     </div>

@@ -50,11 +50,14 @@ export async function createBoard(name: string) {
   return { id: board.id };
 }
 
-export async function renameBoard(id: string, name: string) {
+export async function renameBoard(id: string, name: string, description?: string) {
   await requireSession();
   const clean = name.trim();
   if (!clean) throw new Error("Name is required.");
-  await prisma.board.update({ where: { id }, data: { name: clean } });
+  await prisma.board.update({
+    where: { id },
+    data: { name: clean, ...(description !== undefined ? { description: description.trim() } : {}) },
+  });
   revalidatePath("/projects");
 }
 
@@ -138,6 +141,16 @@ export async function updateNode(
   revalidatePath("/projects");
 }
 
+export async function reorderProjectGroups(boardId: string, orderedIds: string[]) {
+  await requireSession();
+  await prisma.$transaction(
+    orderedIds.map((id, index) =>
+      prisma.projectNode.update({ where: { id }, data: { sortOrder: index } })
+    )
+  );
+  revalidatePath("/projects");
+}
+
 // ---------- Attachments ----------
 export async function uploadAttachment(nodeId: string, formData: FormData) {
   await requireSession();
@@ -194,11 +207,14 @@ export async function createRoadmap(name: string) {
   return { id: roadmap.id };
 }
 
-export async function renameRoadmap(id: string, name: string) {
+export async function renameRoadmap(id: string, name: string, description?: string) {
   await requireSession();
   const clean = name.trim();
   if (!clean) throw new Error("Name is required.");
-  await prisma.roadmap.update({ where: { id }, data: { name: clean } });
+  await prisma.roadmap.update({
+    where: { id },
+    data: { name: clean, ...(description !== undefined ? { description: description.trim() } : {}) },
+  });
   revalidatePath("/roadmap");
 }
 

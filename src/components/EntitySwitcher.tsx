@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 
-type Entity = { id: string; name: string; isDefault: boolean };
+type Entity = { id: string; name: string; description?: string; isDefault: boolean };
 
 export default function EntitySwitcher({
   label,
@@ -20,7 +20,7 @@ export default function EntitySwitcher({
   basePath: "/projects" | "/roadmap";
   actions: {
     create: (name: string) => Promise<{ id: string }>;
-    rename: (id: string, name: string) => Promise<void>;
+    rename: (id: string, name: string, description?: string) => Promise<void>;
     remove: (id: string) => Promise<void>;
   };
 }) {
@@ -30,6 +30,7 @@ export default function EntitySwitcher({
   const [newName, setNewName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renameDescription, setRenameDescription] = useState("");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const ref = useRef<HTMLDivElement>(null);
@@ -88,7 +89,7 @@ export default function EntitySwitcher({
     setError("");
     start(async () => {
       try {
-        await actions.rename(id, clean);
+        await actions.rename(id, clean, renameDescription);
         setRenamingId(null);
         router.refresh();
       } catch (err) {
@@ -128,42 +129,54 @@ export default function EntitySwitcher({
             {entities.map((e) => (
               <div
                 key={e.id}
-                className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm ${
-                  e.id === currentId ? "bg-accent/10 text-accent" : "hover:bg-bg"
-                }`}
+                className={`group flex gap-1 rounded-lg px-2 py-1.5 text-sm ${
+                  renamingId === e.id ? "items-start" : "items-center"
+                } ${e.id === currentId ? "bg-accent/10 text-accent" : "hover:bg-bg"}`}
               >
                 {renamingId === e.id ? (
-                  <>
-                    <input
-                      autoFocus
-                      className="field h-7 flex-1 px-2 py-0 text-xs"
-                      value={renameValue}
-                      onChange={(ev) => setRenameValue(ev.target.value)}
+                  <div className="flex flex-1 flex-col gap-1">
+                    <div className="flex items-center gap-1">
+                      <input
+                        autoFocus
+                        className="field h-7 flex-1 px-2 py-0 text-xs"
+                        value={renameValue}
+                        onChange={(ev) => setRenameValue(ev.target.value)}
+                        onKeyDown={(ev) => {
+                          if (ev.key === "Enter") submitRename(e.id);
+                          if (ev.key === "Escape") setRenamingId(null);
+                        }}
+                        disabled={pending}
+                      />
+                      <button
+                        aria-label="Confirm rename"
+                        title="Save"
+                        className="shrink-0 text-text-muted hover:text-accent disabled:opacity-30"
+                        onClick={() => submitRename(e.id)}
+                        disabled={pending}
+                      >
+                        ✓
+                      </button>
+                      <button
+                        aria-label="Cancel rename"
+                        title="Cancel"
+                        className="shrink-0 text-text-muted hover:text-danger"
+                        onClick={() => setRenamingId(null)}
+                        disabled={pending}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <textarea
+                      className="field h-12 resize-none px-2 py-1 text-xs"
+                      placeholder="Description (shown on the Dashboard)"
+                      value={renameDescription}
+                      onChange={(ev) => setRenameDescription(ev.target.value)}
                       onKeyDown={(ev) => {
-                        if (ev.key === "Enter") submitRename(e.id);
                         if (ev.key === "Escape") setRenamingId(null);
                       }}
                       disabled={pending}
                     />
-                    <button
-                      aria-label="Confirm rename"
-                      title="Save"
-                      className="shrink-0 text-text-muted hover:text-accent disabled:opacity-30"
-                      onClick={() => submitRename(e.id)}
-                      disabled={pending}
-                    >
-                      ✓
-                    </button>
-                    <button
-                      aria-label="Cancel rename"
-                      title="Cancel"
-                      className="shrink-0 text-text-muted hover:text-danger"
-                      onClick={() => setRenamingId(null)}
-                      disabled={pending}
-                    >
-                      ✕
-                    </button>
-                  </>
+                  </div>
                 ) : (
                   <>
                     <button className="min-w-0 flex-1 truncate text-left" onClick={() => select(e.id)}>
@@ -176,6 +189,7 @@ export default function EntitySwitcher({
                       onClick={() => {
                         setRenamingId(e.id);
                         setRenameValue(e.name);
+                        setRenameDescription(e.description ?? "");
                       }}
                     >
                       ✎

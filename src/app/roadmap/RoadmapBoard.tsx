@@ -39,9 +39,18 @@ type MilestoneT = {
   date: string;
   description: string;
 };
-type RoadmapT = { id: string; name: string; isDefault: boolean };
+type RoadmapT = { id: string; name: string; description: string; isDefault: boolean };
 
 const DAY = 86400000;
+
+function darken(hex: string, amt: number) {
+  const c = hex.replace("#", "");
+  if (c.length !== 6) return hex;
+  const r = Math.round(parseInt(c.substring(0, 2), 16) * (1 - amt));
+  const g = Math.round(parseInt(c.substring(2, 4), 16) * (1 - amt));
+  const b = Math.round(parseInt(c.substring(4, 6), 16) * (1 - amt));
+  return "#" + [r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
 const MILESTONE_META: Record<MilestoneType, { label: string; color: string }> = {
   RELEASE: { label: "Release", color: "#D97706" },
   LAUNCH: { label: "Launch", color: "#16A34A" },
@@ -589,7 +598,7 @@ export default function RoadmapBoard({
             <MilestoneIcon type={t} size={12} /> {MILESTONE_META[t].label}
           </button>
         ))}
-        <span className="ml-auto">Drag a bar or marker to reschedule · click to open details</span>
+        <span className="ml-auto">Drag a bar or marker to reschedule · click a lane to dim it · click to open details</span>
       </footer>
 
       {panel?.kind === "lanes" && (
@@ -669,7 +678,7 @@ function ItemBar({
       </div>
       <button
         className="absolute top-0 z-10 h-7 cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
-        style={{ left: 14, width: w, background: color }}
+        style={{ left: 14, width: w, background: idx % 2 === 1 ? darken(color, 0.18) : color }}
         onPointerDown={(e) => onBeginMove(e, item.id, d.start, d.end)}
         onPointerMove={onDragMove}
         onPointerUp={onEndDrag}

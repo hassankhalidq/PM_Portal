@@ -64,7 +64,7 @@ export default async function ProjectsPage({
     <Shell active="projects" userName={session?.user?.name ?? ""} role={role}>
       <ProjectBoard
         nodes={serialized}
-        boards={boards.map((b) => ({ id: b.id, name: b.name, isDefault: b.isDefault }))}
+        boards={boards.map((b) => ({ id: b.id, name: b.name, description: b.description, isDefault: b.isDefault }))}
         currentBoardId={currentBoard?.id ?? ""}
       />
     </Shell>

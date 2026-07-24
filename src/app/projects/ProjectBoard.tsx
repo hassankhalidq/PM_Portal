@@ -9,6 +9,7 @@ import {
   deleteBoard,
   deleteNode,
   renameBoard,
+  reorderProjectGroups,
   updateNode,
   uploadAttachment,
 } from "@/lib/actions";
@@ -16,7 +17,7 @@ import EntitySwitcher from "@/components/EntitySwitcher";
 
 type CommentT = { id: string; body: string; author: string; createdAt: string };
 type AttachmentT = { id: string; name: string; url: string; size: number };
-type BoardT = { id: string; name: string; isDefault: boolean };
+type BoardT = { id: string; name: string; description: string; isDefault: boolean };
 
 export type NodeT = {
   id: string;
@@ -47,17 +48,20 @@ const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
   dates: 180,
 };
 
+// White text on bg-success/bg-warning fails WCAG AA contrast for small bold
+// text (~3.2:1 against a 4.5:1 requirement) — checked against the actual
+// hex values these tokens resolve to. Black text on those two clears 6:1+.
 const STATUS_META: Record<NodeT["status"], { label: string; bg: string; text: string }> = {
-  NOT_STARTED: { label: "Not started", bg: "bg-text-muted/10", text: "text-text-muted" },
-  IN_PROGRESS: { label: "In progress", bg: "bg-info/10", text: "text-info" },
-  BLOCKED: { label: "Blocked", bg: "bg-danger/10", text: "text-danger" },
-  DONE: { label: "Done", bg: "bg-success/10", text: "text-success" },
+  NOT_STARTED: { label: "Not started", bg: "bg-text-muted", text: "text-white" },
+  IN_PROGRESS: { label: "In progress", bg: "bg-info", text: "text-white" },
+  BLOCKED: { label: "Blocked", bg: "bg-danger", text: "text-white" },
+  DONE: { label: "Done", bg: "bg-success", text: "text-black" },
 };
 
 const PRIORITY_META: Record<NodeT["priority"], { label: string; bg: string; text: string }> = {
-  LOW: { label: "Low", bg: "bg-info/10", text: "text-info" },
-  MEDIUM: { label: "Medium", bg: "bg-warning/10", text: "text-warning" },
-  HIGH: { label: "High", bg: "bg-danger/10", text: "text-danger" },
+  LOW: { label: "Low", bg: "bg-info", text: "text-white" },
+  MEDIUM: { label: "Medium", bg: "bg-warning", text: "text-black" },
+  HIGH: { label: "High", bg: "bg-danger", text: "text-white" },
 };
 
 const STATUS_ORDER: Record<NodeT["status"], number> = { NOT_STARTED: 0, IN_PROGRESS: 1, BLOCKED: 2, DONE: 3 };
@@ -186,7 +190,7 @@ export default function ProjectBoard({
   boards: BoardT[];
   currentBoardId: string;
 }) {
-  const [view, setView] = useState<"table" | "kanban">("table");
+  const [view, setView] = useState<"table" | "kanban" | "timeline">("table");
   const [filters, setFilters] = useState({ owner: "", status: "", priority: "" });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -264,6 +268,66 @@ export default function ProjectBoard({
     [nodes]
   );
 
+  // ---------- Group drag-reorder ----------
+  const [, startReorder] = useTransition();
+  const [groupOrder, setGroupOrder] = useState<string[] | null>(null);
+  useEffect(() => setGroupOrder(null), [nodes]);
+  const rootRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const groupDragRef = useRef<{ id: string; startY: number } | null>(null);
+  const [groupDrag, setGroupDrag] = useState<{ id: string; deltaY: number } | null>(null);
+
+  const beginGroupDrag = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    groupDragRef.current = { id, startY: e.clientY };
+    setGroupDrag({ id, deltaY: 0 });
+  };
+  const onGroupDragMove = (e: React.PointerEvent) => {
+    if (!groupDragRef.current) return;
+    setGroupDrag({ id: groupDragRef.current.id, deltaY: e.clientY - groupDragRef.current.startY });
+  };
+  const endGroupDrag = (e: React.PointerEvent, currentRootIds: string[]) => {
+    const d = groupDragRef.current;
+    groupDragRef.current = null;
+    setGroupDrag(null);
+    if (!d) return;
+    const others = currentRootIds.filter((id) => id !== d.id);
+    const dropY = e.clientY;
+    let insertIdx = others.length;
+    for (let i = 0; i < others.length; i++) {
+      const el = rootRefs.current.get(others[i]);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (dropY < rect.top + rect.height / 2) {
+        insertIdx = i;
+        break;
+      }
+    }
+    const next = [...others];
+    next.splice(insertIdx, 0, d.id);
+    if (next.join() === currentRootIds.join()) return;
+    const prevOrder = currentRootIds;
+    setGroupOrder(next);
+    startReorder(() => {
+      reorderProjectGroups(currentBoardId, next).catch(() => setGroupOrder(prevOrder));
+    });
+  };
+
+  // Keyboard alternative to the pointer-drag reorder above (grip is a real
+  // button, focusable via Tab; Arrow Up/Down move it one slot at a time).
+  const moveGroup = (id: string, currentRootIds: string[], direction: -1 | 1) => {
+    const from = currentRootIds.indexOf(id);
+    const to = from + direction;
+    if (from === -1 || to < 0 || to >= currentRootIds.length) return;
+    const next = [...currentRootIds];
+    [next[from], next[to]] = [next[to], next[from]];
+    const prevOrder = currentRootIds;
+    setGroupOrder(next);
+    startReorder(() => {
+      reorderProjectGroups(currentBoardId, next).catch(() => setGroupOrder(prevOrder));
+    });
+  };
+
   const filterActive = !!(filters.owner || filters.status || filters.priority);
 
   const matches = (n: NodeT) =>
@@ -296,7 +360,12 @@ export default function ProjectBoard({
     });
 
   const selected = selectedId ? byId.get(selectedId) ?? null : null;
-  const roots = (orderedChildren.get(null) ?? []).filter((r) => visible.has(r.id));
+  const naturalRoots = (orderedChildren.get(null) ?? []).filter((r) => visible.has(r.id));
+  const roots =
+    groupOrder && sort === null
+      ? (groupOrder.map((id) => byId.get(id)).filter(Boolean) as NodeT[]).filter((r) => visible.has(r.id))
+      : naturalRoots;
+  const dragReorderEnabled = sort === null && !filterActive;
 
   return (
     <div className="flex h-screen flex-col">
@@ -334,6 +403,14 @@ export default function ProjectBoard({
             onClick={() => setView("kanban")}
           >
             Kanban
+          </button>
+          <button
+            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              view === "timeline" ? "bg-accent/10 text-accent" : "text-text-muted"
+            }`}
+            onClick={() => setView("timeline")}
+          >
+            Timeline
           </button>
         </div>
         <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
@@ -386,30 +463,78 @@ export default function ProjectBoard({
                   </div>
                   <span />
                 </div>
-                {roots.map((root) => (
-                  <div key={root.id} className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-                    <GroupHeader
-                      node={root}
-                      count={descendantCount.get(root.id) ?? 0}
-                      byParent={orderedChildren}
-                      visible={visible}
-                      collapsed={collapsed}
-                      toggle={toggle}
-                      onSelect={setSelectedId}
-                      selectedId={selectedId}
-                      gridTemplate={gridTemplate}
-                    />
-                  </div>
-                ))}
+                {roots.map((root) => {
+                  const dragging = groupDrag?.id === root.id;
+                  return (
+                    <div
+                      key={root.id}
+                      ref={(el) => {
+                        if (el) rootRefs.current.set(root.id, el);
+                        else rootRefs.current.delete(root.id);
+                      }}
+                      className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+                      style={
+                        dragging
+                          ? { transform: `translateY(${groupDrag!.deltaY}px)`, opacity: 0.85, position: "relative", zIndex: 20 }
+                          : undefined
+                      }
+                    >
+                      <GroupHeader
+                        node={root}
+                        count={descendantCount.get(root.id) ?? 0}
+                        byParent={orderedChildren}
+                        visible={visible}
+                        collapsed={collapsed}
+                        toggle={toggle}
+                        onSelect={setSelectedId}
+                        selectedId={selectedId}
+                        gridTemplate={gridTemplate}
+                        dragEnabled={dragReorderEnabled}
+                        onGripPointerDown={(e) => beginGroupDrag(e, root.id)}
+                        onGripPointerMove={onGroupDragMove}
+                        onGripPointerUp={(e) =>
+                          endGroupDrag(
+                            e,
+                            roots.map((r) => r.id)
+                          )
+                        }
+                        onGripKeyDown={(e) => {
+                          if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            moveGroup(
+                              root.id,
+                              roots.map((r) => r.id),
+                              -1
+                            );
+                          } else if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            moveGroup(
+                              root.id,
+                              roots.map((r) => r.id),
+                              1
+                            );
+                          }
+                        }}
+                      />
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
-      ) : (
+      ) : view === "kanban" ? (
         <KanbanBoard
           nodes={nodes.filter((n) => visible.has(n.id))}
           onSelect={setSelectedId}
           filterActive={filterActive}
+        />
+      ) : (
+        <TimelineView
+          nodes={nodes}
+          byParent={orderedChildren}
+          visible={visible}
+          onSelect={setSelectedId}
         />
       )}
 
@@ -607,6 +732,11 @@ function GroupHeader({
   onSelect,
   selectedId,
   gridTemplate,
+  dragEnabled,
+  onGripPointerDown,
+  onGripPointerMove,
+  onGripPointerUp,
+  onGripKeyDown,
 }: {
   node: NodeT;
   count: number;
@@ -617,6 +747,11 @@ function GroupHeader({
   onSelect: (id: string) => void;
   selectedId: string | null;
   gridTemplate: string;
+  dragEnabled?: boolean;
+  onGripPointerDown?: (e: React.PointerEvent) => void;
+  onGripPointerMove?: (e: React.PointerEvent) => void;
+  onGripPointerUp?: (e: React.PointerEvent) => void;
+  onGripKeyDown?: (e: React.KeyboardEvent) => void;
 }) {
   const kids = (byParent.get(node.id) ?? []).filter((k) => visible.has(k.id));
   const isCollapsed = collapsed.has(node.id);
@@ -629,6 +764,20 @@ function GroupHeader({
         style={{ gridTemplateColumns: gridTemplate }}
       >
         <div className="flex min-w-0 items-center gap-2 px-3">
+          {dragEnabled && (
+            <button
+              type="button"
+              aria-label="Drag to reorder, or use Arrow Up/Down"
+              title="Drag to reorder (or focus + Arrow Up/Down)"
+              onPointerDown={onGripPointerDown}
+              onPointerMove={onGripPointerMove}
+              onPointerUp={onGripPointerUp}
+              onKeyDown={onGripKeyDown}
+              className="focus-ring shrink-0 cursor-grab select-none touch-none rounded text-sm text-text-muted"
+            >
+              ⠿
+            </button>
+          )}
           <button
             aria-label={isCollapsed ? "Expand" : "Collapse"}
             onClick={() => toggle(node.id)}
@@ -1255,6 +1404,206 @@ function KanbanBoard({
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+const TIMELINE_PX_PER_DAY = 6;
+const TIMELINE_ROW_HEIGHT = 32;
+
+type GanttRow = {
+  id: string;
+  name: string;
+  depth: number;
+  isGroup: boolean;
+  status: NodeT["status"] | null;
+  progress: number;
+  start: Date | null;
+  end: Date | null;
+};
+
+function dateExtent(
+  id: string,
+  byParent: Map<string | null, NodeT[]>,
+  byId: Map<string, NodeT>
+): { start: Date | null; end: Date | null } {
+  const node = byId.get(id)!;
+  const kids = byParent.get(id) ?? [];
+  let start = node.startDate ? new Date(node.startDate) : null;
+  let end = node.endDate ? new Date(node.endDate) : null;
+  for (const k of kids) {
+    const r = dateExtent(k.id, byParent, byId);
+    if (r.start && (!start || r.start < start)) start = r.start;
+    if (r.end && (!end || r.end > end)) end = r.end;
+  }
+  return { start, end };
+}
+
+function TimelineView({
+  nodes,
+  byParent,
+  visible,
+  onSelect,
+}: {
+  nodes: NodeT[];
+  byParent: Map<string | null, NodeT[]>;
+  visible: Set<string>;
+  onSelect: (id: string) => void;
+}) {
+  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+
+  const rows = useMemo(() => {
+    const out: GanttRow[] = [];
+    // `visible` already marks an ancestor as visible whenever any descendant
+    // matches the active filters (see the `visible` useMemo above in
+    // ProjectBoard), so pruning here the moment a node isn't in `visible` is
+    // safe — it means neither that node nor anything under it matches.
+    const visit = (id: string, depth: number) => {
+      if (!visible.has(id)) return;
+      const node = byId.get(id);
+      if (!node) return;
+      const kids = byParent.get(id) ?? [];
+      const visibleKids = kids.filter((k) => visible.has(k.id));
+      const isGroup = visibleKids.length > 0;
+      const { start, end } = dateExtent(id, byParent, byId);
+      out.push({ id, name: node.name, depth, isGroup, status: isGroup ? null : node.status, progress: node.progress, start, end });
+      for (const k of visibleKids) visit(k.id, depth + 1);
+    };
+    for (const root of byParent.get(null) ?? []) visit(root.id, 0);
+    return out;
+  }, [byId, byParent, visible]);
+
+  const { minDate, totalDays } = useMemo(() => {
+    const dated = rows.filter((r) => r.start && r.end);
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (dated.length === 0) {
+      const end = new Date(today);
+      end.setUTCDate(end.getUTCDate() + 60);
+      return { minDate: today, totalDays: 60 };
+    }
+    let min = dated[0].start!;
+    let max = dated[0].end!;
+    for (const r of dated) {
+      if (r.start! < min) min = r.start!;
+      if (r.end! > max) max = r.end!;
+    }
+    min = new Date(min);
+    min.setUTCDate(min.getUTCDate() - 7);
+    max = new Date(max);
+    max.setUTCDate(max.getUTCDate() + 14);
+    const days = Math.max(30, Math.round((max.getTime() - min.getTime()) / 86400000));
+    return { minDate: min, totalDays: days };
+  }, [rows]);
+
+  const dayOffset = (d: Date) => Math.round((d.getTime() - minDate.getTime()) / 86400000);
+
+  const monthHeaders = useMemo(() => {
+    const out: { label: string; left: number; width: number }[] = [];
+    const cursor = new Date(minDate);
+    cursor.setUTCDate(1);
+    const totalEnd = new Date(minDate);
+    totalEnd.setUTCDate(totalEnd.getUTCDate() + totalDays);
+    while (cursor < totalEnd) {
+      const next = new Date(cursor);
+      next.setUTCMonth(next.getUTCMonth() + 1);
+      const left = Math.max(0, dayOffset(cursor)) * TIMELINE_PX_PER_DAY;
+      const rightDay = Math.min(dayOffset(next), totalDays);
+      const width = Math.max(0, rightDay * TIMELINE_PX_PER_DAY - left);
+      out.push({
+        label: cursor.toLocaleDateString("en-GB", { month: "short", year: "2-digit", timeZone: "UTC" }),
+        left,
+        width,
+      });
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minDate, totalDays]);
+
+  const todayLeft = dayOffset(new Date()) * TIMELINE_PX_PER_DAY;
+  const chartWidth = totalDays * TIMELINE_PX_PER_DAY;
+
+  if (rows.length === 0) {
+    return <div className="mt-16 text-center text-sm text-text-muted">No projects yet.</div>;
+  }
+
+  return (
+    <div className="flex-1 overflow-auto">
+      <div className="flex" style={{ width: 280 + chartWidth }}>
+        <div className="w-[280px] shrink-0">
+          <div className="h-9 border-b border-border" />
+          {rows.map((r) => (
+            <div
+              key={r.id}
+              className="flex items-center gap-2 border-b border-border/70"
+              style={{ height: TIMELINE_ROW_HEIGHT, paddingLeft: 12 + r.depth * 18 }}
+            >
+              {!r.isGroup && (
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    r.status ? STATUS_META[r.status].bg : "bg-text-muted"
+                  }`}
+                />
+              )}
+              <button
+                onClick={() => onSelect(r.id)}
+                className={`min-w-0 flex-1 truncate text-left hover:text-accent ${
+                  r.isGroup ? "text-sm font-semibold" : "text-[13px]"
+                }`}
+              >
+                {r.name}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="relative flex-1" style={{ width: chartWidth }}>
+          <div className="sticky top-0 z-10 flex h-9 border-b border-border bg-surface">
+            {monthHeaders.map((m, i) => (
+              <div
+                key={i}
+                className="absolute top-0 flex h-full items-center border-r border-border px-2 font-mono text-xs text-text-muted"
+                style={{ left: m.left, width: m.width }}
+              >
+                {m.label}
+              </div>
+            ))}
+          </div>
+          <div className="relative" style={{ height: rows.length * TIMELINE_ROW_HEIGHT }}>
+            <div className="pointer-events-none absolute inset-y-0 border-l border-accent/50" style={{ left: todayLeft }} />
+            {rows.map((r, i) => {
+              if (!r.start || !r.end) return null;
+              const left = Math.max(0, dayOffset(r.start)) * TIMELINE_PX_PER_DAY;
+              const right = Math.min(totalDays, dayOffset(r.end)) * TIMELINE_PX_PER_DAY;
+              const width = Math.max(6, right - left);
+              const top = i * TIMELINE_ROW_HEIGHT + (r.isGroup ? 11 : 5);
+              const height = r.isGroup ? 10 : TIMELINE_ROW_HEIGHT - 10;
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => onSelect(r.id)}
+                  title={r.name}
+                  className={`absolute overflow-hidden rounded-full text-left text-[11px] font-medium text-white ${
+                    r.isGroup ? "bg-slate-700" : r.status ? STATUS_META[r.status].bg : "bg-text-muted"
+                  }`}
+                  style={{ left, width, top, height }}
+                >
+                  {!r.isGroup && (
+                    <span
+                      className="absolute inset-y-0 left-0 rounded-full bg-black/25"
+                      style={{ width: `${Math.max(0, Math.min(100, r.progress))}%` }}
+                    />
+                  )}
+                  <span className="relative flex h-full items-center overflow-hidden text-ellipsis whitespace-nowrap px-2.5">
+                    {r.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -34,7 +34,7 @@ export default async function RoadmapPage({
   return (
     <Shell active="roadmap" userName={session?.user?.name ?? ""} role={role}>
       <RoadmapBoard
-        roadmaps={roadmaps.map((r) => ({ id: r.id, name: r.name, isDefault: r.isDefault }))}
+        roadmaps={roadmaps.map((r) => ({ id: r.id, name: r.name, description: r.description, isDefault: r.isDefault }))}
         currentRoadmapId={currentRoadmap?.id ?? ""}
         currentTheme={currentRoadmap?.theme ?? "indigo"}
         categories={categories.map((c) => ({
