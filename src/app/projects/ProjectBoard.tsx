@@ -239,6 +239,7 @@ export default function ProjectBoard({
   const [creatingRoot, setCreatingRoot] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
   const [colWidths, setColWidths] = useState<Record<ColumnKey, number>>(DEFAULT_WIDTHS);
+  const [timelinePxPerDay, setTimelinePxPerDay] = useState(6);
 
   const cycleSort = (key: SortKey) =>
     setSort((prev) => {
@@ -429,6 +430,20 @@ export default function ProjectBoard({
           />
         </div>
         <FiltersPopover filters={filters} setFilters={setFilters} owners={owners} />
+        {view === "timeline" && (
+          <label className="flex items-center gap-2 text-xs text-text-muted">
+            Zoom
+            <input
+              type="range"
+              min={2}
+              max={16}
+              step={1}
+              value={timelinePxPerDay}
+              onChange={(e) => setTimelinePxPerDay(Number(e.target.value))}
+              aria-label="Timeline zoom"
+            />
+          </label>
+        )}
         <div className="flex rounded-lg border border-border p-0.5">
           <button
             className={`rounded-md px-2.5 py-1 text-xs font-medium ${
@@ -585,6 +600,7 @@ export default function ProjectBoard({
           byParent={orderedChildren}
           visible={visible}
           dependencies={dependencies}
+          pxPerDay={timelinePxPerDay}
           onSelect={setSelectedId}
         />
       ) : (
@@ -1548,7 +1564,6 @@ function KanbanBoard({
   );
 }
 
-const TIMELINE_PX_PER_DAY = 6;
 const TIMELINE_ROW_HEIGHT = 32;
 
 type GanttRow = {
@@ -1560,23 +1575,46 @@ type GanttRow = {
   progress: number;
   start: Date | null;
   end: Date | null;
+  openEnded: boolean;
 };
+
+// A node with only a start date (no end) would otherwise render no bar at
+// all. Treat it as "open-ended": effective end is today (so the bar grows
+// day by day while it's not Done) or a minimal 1-day sliver if that's not
+// applicable yet — it always renders *something* rather than vanishing.
+function effectiveLeafRange(
+  node: NodeT,
+  today: Date
+): { start: Date | null; end: Date | null; openEnded: boolean } {
+  const start = node.startDate ? new Date(node.startDate) : null;
+  if (!start) return { start: null, end: node.endDate ? new Date(node.endDate) : null, openEnded: false };
+  if (node.endDate) return { start, end: new Date(node.endDate), openEnded: false };
+  const minEnd = new Date(start);
+  minEnd.setUTCDate(minEnd.getUTCDate() + 1);
+  const openEnded = node.status !== "DONE";
+  const end = openEnded && today > minEnd ? today : minEnd;
+  return { start, end, openEnded };
+}
 
 function dateExtent(
   id: string,
   byParent: Map<string | null, NodeT[]>,
-  byId: Map<string, NodeT>
-): { start: Date | null; end: Date | null } {
+  byId: Map<string, NodeT>,
+  today: Date
+): { start: Date | null; end: Date | null; openEnded: boolean } {
   const node = byId.get(id)!;
   const kids = byParent.get(id) ?? [];
-  let start = node.startDate ? new Date(node.startDate) : null;
-  let end = node.endDate ? new Date(node.endDate) : null;
+  const own = effectiveLeafRange(node, today);
+  let start = own.start;
+  let end = own.end;
+  let openEnded = own.openEnded;
   for (const k of kids) {
-    const r = dateExtent(k.id, byParent, byId);
+    const r = dateExtent(k.id, byParent, byId, today);
     if (r.start && (!start || r.start < start)) start = r.start;
     if (r.end && (!end || r.end > end)) end = r.end;
+    if (r.openEnded) openEnded = true;
   }
-  return { start, end };
+  return { start, end, openEnded };
 }
 
 function TimelineView({
@@ -1584,15 +1622,22 @@ function TimelineView({
   byParent,
   visible,
   dependencies,
+  pxPerDay,
   onSelect,
 }: {
   nodes: NodeT[];
   byParent: Map<string | null, NodeT[]>;
   visible: Set<string>;
   dependencies: DependencyT[];
+  pxPerDay: number;
   onSelect: (id: string) => void;
 }) {
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }, []);
 
   const rows = useMemo(() => {
     const out: GanttRow[] = [];
@@ -1607,18 +1652,16 @@ function TimelineView({
       const kids = byParent.get(id) ?? [];
       const visibleKids = kids.filter((k) => visible.has(k.id));
       const isGroup = visibleKids.length > 0;
-      const { start, end } = dateExtent(id, byParent, byId);
-      out.push({ id, name: node.name, depth, isGroup, status: isGroup ? null : node.status, progress: node.progress, start, end });
+      const { start, end, openEnded } = dateExtent(id, byParent, byId, today);
+      out.push({ id, name: node.name, depth, isGroup, status: isGroup ? null : node.status, progress: node.progress, start, end, openEnded });
       for (const k of visibleKids) visit(k.id, depth + 1);
     };
     for (const root of byParent.get(null) ?? []) visit(root.id, 0);
     return out;
-  }, [byId, byParent, visible]);
+  }, [byId, byParent, visible, today]);
 
   const { minDate, totalDays } = useMemo(() => {
     const dated = rows.filter((r) => r.start && r.end);
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
     if (dated.length === 0) {
       const end = new Date(today);
       end.setUTCDate(end.getUTCDate() + 60);
@@ -1636,7 +1679,7 @@ function TimelineView({
     max.setUTCDate(max.getUTCDate() + 14);
     const days = Math.max(30, Math.round((max.getTime() - min.getTime()) / 86400000));
     return { minDate: min, totalDays: days };
-  }, [rows]);
+  }, [rows, today]);
 
   const dayOffset = (d: Date) => Math.round((d.getTime() - minDate.getTime()) / 86400000);
 
@@ -1649,9 +1692,9 @@ function TimelineView({
     while (cursor < totalEnd) {
       const next = new Date(cursor);
       next.setUTCMonth(next.getUTCMonth() + 1);
-      const left = Math.max(0, dayOffset(cursor)) * TIMELINE_PX_PER_DAY;
+      const left = Math.max(0, dayOffset(cursor)) * pxPerDay;
       const rightDay = Math.min(dayOffset(next), totalDays);
-      const width = Math.max(0, rightDay * TIMELINE_PX_PER_DAY - left);
+      const width = Math.max(0, rightDay * pxPerDay - left);
       out.push({
         label: cursor.toLocaleDateString("en-GB", { month: "short", year: "2-digit", timeZone: "UTC" }),
         left,
@@ -1661,17 +1704,17 @@ function TimelineView({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minDate, totalDays]);
+  }, [minDate, totalDays, pxPerDay]);
 
-  const todayLeft = dayOffset(new Date()) * TIMELINE_PX_PER_DAY;
-  const chartWidth = totalDays * TIMELINE_PX_PER_DAY;
+  const todayLeft = dayOffset(new Date()) * pxPerDay;
+  const chartWidth = totalDays * pxPerDay;
 
   const barGeom = useMemo(() => {
     const map = new Map<string, { left: number; width: number; top: number; height: number }>();
     rows.forEach((r, i) => {
       if (!r.start || !r.end) return;
-      const left = Math.max(0, dayOffset(r.start)) * TIMELINE_PX_PER_DAY;
-      const right = Math.min(totalDays, dayOffset(r.end)) * TIMELINE_PX_PER_DAY;
+      const left = Math.max(0, dayOffset(r.start)) * pxPerDay;
+      const right = Math.min(totalDays, dayOffset(r.end)) * pxPerDay;
       const width = Math.max(6, right - left);
       const top = i * TIMELINE_ROW_HEIGHT + (r.isGroup ? 11 : 5);
       const height = r.isGroup ? 10 : TIMELINE_ROW_HEIGHT - 10;
@@ -1679,7 +1722,7 @@ function TimelineView({
     });
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, totalDays, minDate]);
+  }, [rows, totalDays, minDate, pxPerDay]);
 
   const dependencyPaths = useMemo(() => {
     const out: string[] = [];
@@ -1840,10 +1883,18 @@ function TimelineView({
                 >
                   <button
                     onClick={() => onSelect(r.id)}
-                    title={r.name}
-                    className={`absolute inset-0 overflow-hidden rounded-full text-left text-[11px] font-medium text-white ${
-                      r.isGroup ? "bg-slate-700" : r.status ? STATUS_META[r.status].bg : "bg-text-muted"
-                    }`}
+                    title={r.openEnded ? `${r.name} (no end date set — shown through today)` : r.name}
+                    className={`absolute inset-0 overflow-hidden text-left text-[11px] font-medium text-white ${
+                      r.isGroup ? "rounded-full bg-slate-700" : r.status ? STATUS_META[r.status].bg : "bg-text-muted"
+                    } ${!r.isGroup && r.openEnded ? "rounded-l-full" : !r.isGroup ? "rounded-full" : ""}`}
+                    style={
+                      r.openEnded
+                        ? {
+                            maskImage: "linear-gradient(to right, black 70%, transparent 100%)",
+                            WebkitMaskImage: "linear-gradient(to right, black 70%, transparent 100%)",
+                          }
+                        : undefined
+                    }
                   >
                     {!r.isGroup && (
                       <span
