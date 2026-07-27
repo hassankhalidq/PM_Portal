@@ -197,6 +197,107 @@ export async function addComment(nodeId: string, body: string) {
   revalidatePath("/projects");
 }
 
+// ---------- Log entries ----------
+export async function createLogEntry(
+  nodeId: string,
+  data: { date: string; activity: string; owner?: string; waitingOn?: string; status?: string; remarks?: string }
+) {
+  await requireSession();
+  const activity = data.activity.trim();
+  if (!activity) throw new Error("Activity is required.");
+  await prisma.logEntry.create({
+    data: {
+      nodeId,
+      date: new Date(data.date),
+      activity,
+      owner: (data.owner ?? "").trim(),
+      waitingOn: (data.waitingOn ?? "").trim(),
+      status: (data.status ?? "").trim(),
+      remarks: (data.remarks ?? "").trim(),
+    },
+  });
+  revalidatePath("/projects");
+}
+
+export async function updateLogEntry(
+  id: string,
+  data: Partial<{ date: string; nodeId: string; activity: string; owner: string; waitingOn: string; status: string; remarks: string }>
+) {
+  await requireSession();
+  if (data.activity !== undefined && !data.activity.trim()) throw new Error("Activity is required.");
+  await prisma.logEntry.update({
+    where: { id },
+    data: {
+      ...(data.date !== undefined ? { date: new Date(data.date) } : {}),
+      ...(data.nodeId !== undefined ? { nodeId: data.nodeId } : {}),
+      ...(data.activity !== undefined ? { activity: data.activity.trim() } : {}),
+      ...(data.owner !== undefined ? { owner: data.owner.trim() } : {}),
+      ...(data.waitingOn !== undefined ? { waitingOn: data.waitingOn.trim() } : {}),
+      ...(data.status !== undefined ? { status: data.status.trim() } : {}),
+      ...(data.remarks !== undefined ? { remarks: data.remarks.trim() } : {}),
+    },
+  });
+  revalidatePath("/projects");
+}
+
+export async function deleteLogEntry(id: string) {
+  await requireSession();
+  await prisma.logEntry.delete({ where: { id } });
+  revalidatePath("/projects");
+}
+
+// ---------- Item dependencies ----------
+export async function addDependency(predecessorId: string, successorId: string) {
+  await requireSession();
+  if (predecessorId === successorId) throw new Error("An item can't depend on itself.");
+
+  const [predecessor, successor] = await Promise.all([
+    prisma.projectNode.findUnique({ where: { id: predecessorId }, select: { boardId: true } }),
+    prisma.projectNode.findUnique({ where: { id: successorId }, select: { boardId: true } }),
+  ]);
+  if (!predecessor || !successor) throw new Error("Item not found.");
+  if (predecessor.boardId !== successor.boardId) {
+    throw new Error("Items must be on the same board to be linked.");
+  }
+
+  // Reject if this edge would close a cycle: walk forward from the proposed
+  // successor through existing predecessor->successor edges: if that walk
+  // ever reaches the proposed predecessor, adding predecessor->successor
+  // would make a loop.
+  const edges = await prisma.itemDependency.findMany({
+    where: { predecessor: { boardId: predecessor.boardId } },
+    select: { predecessorId: true, successorId: true },
+  });
+  const forward = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = forward.get(e.predecessorId) ?? [];
+    list.push(e.successorId);
+    forward.set(e.predecessorId, list);
+  }
+  const seen = new Set<string>();
+  const queue = [successorId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (current === predecessorId) throw new Error("That link would create a circular dependency.");
+    if (seen.has(current)) continue;
+    seen.add(current);
+    queue.push(...(forward.get(current) ?? []));
+  }
+
+  await prisma.itemDependency.upsert({
+    where: { predecessorId_successorId: { predecessorId, successorId } },
+    create: { predecessorId, successorId },
+    update: {},
+  });
+  revalidatePath("/projects");
+}
+
+export async function removeDependency(id: string) {
+  await requireSession();
+  await prisma.itemDependency.delete({ where: { id } });
+  revalidatePath("/projects");
+}
+
 // ---------- Roadmaps ----------
 export async function createRoadmap(name: string) {
   await requireSession();

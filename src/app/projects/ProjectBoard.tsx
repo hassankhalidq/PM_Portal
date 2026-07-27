@@ -3,13 +3,18 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   addComment,
+  addDependency,
   createBoard,
+  createLogEntry,
   createNode,
   deleteAttachment,
   deleteBoard,
+  deleteLogEntry,
   deleteNode,
+  removeDependency,
   renameBoard,
   reorderProjectGroups,
+  updateLogEntry,
   updateNode,
   uploadAttachment,
 } from "@/lib/actions";
@@ -18,6 +23,19 @@ import EntitySwitcher from "@/components/EntitySwitcher";
 type CommentT = { id: string; body: string; author: string; createdAt: string };
 type AttachmentT = { id: string; name: string; url: string; size: number };
 type BoardT = { id: string; name: string; description: string; isDefault: boolean };
+export type LogEntryT = {
+  id: string;
+  date: string;
+  activity: string;
+  owner: string;
+  waitingOn: string;
+  status: string;
+  remarks: string;
+  nodeId: string;
+  nodeName: string;
+  nodeParentId: string | null;
+};
+export type DependencyT = { id: string; predecessorId: string; successorId: string };
 
 export type NodeT = {
   id: string;
@@ -82,6 +100,26 @@ function ProgressBar({ value, className = "" }: { value: number; className?: str
       />
     </div>
   );
+}
+
+// Depth-first, indented flat list of every node in the tree — reused by the
+// dependency picker (SidePanel) and the item picker (LogView).
+function flattenTree(nodes: NodeT[]): { id: string; label: string }[] {
+  const byParent = new Map<string | null, NodeT[]>();
+  for (const n of nodes) {
+    const list = byParent.get(n.parentId) ?? [];
+    list.push(n);
+    byParent.set(n.parentId, list);
+  }
+  const out: { id: string; label: string }[] = [];
+  const visit = (parentId: string | null, depth: number) => {
+    for (const n of byParent.get(parentId) ?? []) {
+      out.push({ id: n.id, label: `${"— ".repeat(depth)}${n.name}` });
+      visit(n.id, depth + 1);
+    }
+  };
+  visit(null, 0);
+  return out;
 }
 
 function fmtDate(d: string | null) {
@@ -185,12 +223,16 @@ export default function ProjectBoard({
   nodes,
   boards,
   currentBoardId,
+  logEntries,
+  dependencies,
 }: {
   nodes: NodeT[];
   boards: BoardT[];
   currentBoardId: string;
+  logEntries: LogEntryT[];
+  dependencies: DependencyT[];
 }) {
-  const [view, setView] = useState<"table" | "kanban" | "timeline">("table");
+  const [view, setView] = useState<"table" | "kanban" | "timeline" | "log">("table");
   const [filters, setFilters] = useState({ owner: "", status: "", priority: "" });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -412,6 +454,14 @@ export default function ProjectBoard({
           >
             Timeline
           </button>
+          <button
+            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              view === "log" ? "bg-accent/10 text-accent" : "text-text-muted"
+            }`}
+            onClick={() => setView("log")}
+          >
+            Log
+          </button>
         </div>
         <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
           New project
@@ -529,19 +579,24 @@ export default function ProjectBoard({
           onSelect={setSelectedId}
           filterActive={filterActive}
         />
-      ) : (
+      ) : view === "timeline" ? (
         <TimelineView
           nodes={nodes}
           byParent={orderedChildren}
           visible={visible}
+          dependencies={dependencies}
           onSelect={setSelectedId}
         />
+      ) : (
+        <LogView nodes={nodes} logEntries={logEntries} />
       )}
 
       {selected && (
         <SidePanel
           key={selected.id}
           node={selected}
+          allNodes={nodes}
+          dependencies={dependencies}
           onClose={() => setSelectedId(null)}
           onDeleted={() => setSelectedId(null)}
         />
@@ -1037,10 +1092,14 @@ function InlineCreate({
 
 function SidePanel({
   node,
+  allNodes,
+  dependencies,
   onClose,
   onDeleted,
 }: {
   node: NodeT;
+  allNodes: NodeT[];
+  dependencies: DependencyT[];
   onClose: () => void;
   onDeleted: () => void;
 }) {
@@ -1105,6 +1164,30 @@ function SidePanel({
       await addComment(node.id, comment);
       setComment("");
     });
+  };
+
+  const [depError, setDepError] = useState("");
+  const byNodeId = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);
+  const predecessors = dependencies.filter((d) => d.successorId === node.id);
+  const dependents = dependencies.filter((d) => d.predecessorId === node.id);
+  const pickerOptions = flattenTree(allNodes).filter(
+    (o) => o.id !== node.id && !predecessors.some((p) => p.predecessorId === o.id)
+  );
+
+  const addPredecessor = (predecessorId: string) => {
+    if (!predecessorId) return;
+    setDepError("");
+    start(async () => {
+      try {
+        await addDependency(predecessorId, node.id);
+      } catch (err) {
+        setDepError(err instanceof Error ? err.message : "Failed to link.");
+      }
+    });
+  };
+  const removePredecessor = (id: string) => {
+    setDepError("");
+    start(() => removeDependency(id));
   };
 
   return (
@@ -1218,6 +1301,62 @@ function SidePanel({
           <button className="btn-ghost text-danger" onClick={remove} disabled={pending}>
             Delete
           </button>
+        </div>
+
+        <div className="border-t border-border pt-4">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
+            Depends on (<span className="figure">{predecessors.length}</span>)
+          </h3>
+          {depError && <p className="mb-2 text-sm text-danger">{depError}</p>}
+          <div className="mb-2 space-y-1.5">
+            {predecessors.length === 0 && (
+              <p className="text-sm text-text-muted">Not blocked by anything.</p>
+            )}
+            {predecessors.map((d) => {
+              const item = byNodeId.get(d.predecessorId);
+              return (
+                <div key={d.id} className="flex items-center gap-2 rounded-lg bg-bg px-3 py-2">
+                  <span className="min-w-0 flex-1 truncate text-sm">{item?.name ?? "Unknown item"}</span>
+                  <button
+                    aria-label={`Remove dependency on ${item?.name ?? "item"}`}
+                    className="shrink-0 text-xs text-text-muted hover:text-danger"
+                    onClick={() => removePredecessor(d.id)}
+                    disabled={pending}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <select
+            className="field"
+            value=""
+            disabled={pending || pickerOptions.length === 0}
+            onChange={(e) => addPredecessor(e.target.value)}
+          >
+            <option value="">+ Add dependency…</option>
+            {pickerOptions.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+
+          {dependents.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
+                Blocks (<span className="figure">{dependents.length}</span>)
+              </h3>
+              <div className="space-y-1.5">
+                {dependents.map((d) => (
+                  <div key={d.id} className="rounded-lg bg-bg px-3 py-2 text-sm text-text-muted">
+                    {byNodeId.get(d.successorId)?.name ?? "Unknown item"}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="border-t border-border pt-4">
@@ -1444,11 +1583,13 @@ function TimelineView({
   nodes,
   byParent,
   visible,
+  dependencies,
   onSelect,
 }: {
   nodes: NodeT[];
   byParent: Map<string | null, NodeT[]>;
   visible: Set<string>;
+  dependencies: DependencyT[];
   onSelect: (id: string) => void;
 }) {
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
@@ -1525,12 +1666,89 @@ function TimelineView({
   const todayLeft = dayOffset(new Date()) * TIMELINE_PX_PER_DAY;
   const chartWidth = totalDays * TIMELINE_PX_PER_DAY;
 
+  const barGeom = useMemo(() => {
+    const map = new Map<string, { left: number; width: number; top: number; height: number }>();
+    rows.forEach((r, i) => {
+      if (!r.start || !r.end) return;
+      const left = Math.max(0, dayOffset(r.start)) * TIMELINE_PX_PER_DAY;
+      const right = Math.min(totalDays, dayOffset(r.end)) * TIMELINE_PX_PER_DAY;
+      const width = Math.max(6, right - left);
+      const top = i * TIMELINE_ROW_HEIGHT + (r.isGroup ? 11 : 5);
+      const height = r.isGroup ? 10 : TIMELINE_ROW_HEIGHT - 10;
+      map.set(r.id, { left, width, top, height });
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, totalDays, minDate]);
+
+  const dependencyPaths = useMemo(() => {
+    const out: string[] = [];
+    for (const dep of dependencies) {
+      const from = barGeom.get(dep.predecessorId);
+      const to = barGeom.get(dep.successorId);
+      if (!from || !to) continue;
+      const x1 = from.left + from.width;
+      const y1 = from.top + from.height / 2;
+      const x2 = to.left;
+      const y2 = to.top + to.height / 2;
+      const midX = x1 + 10;
+      out.push(`M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`);
+    }
+    return out;
+  }, [dependencies, barGeom]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const barRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const connectDragRef = useRef<{ fromId: string } | null>(null);
+  const [connectPreview, setConnectPreview] = useState<{ fromId: string; x: number; y: number } | null>(null);
+  const [depError, setDepError] = useState("");
+  const [, startDep] = useTransition();
+
+  const relPoint = (e: React.PointerEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    return { x: e.clientX - (rect?.left ?? 0), y: e.clientY - (rect?.top ?? 0) };
+  };
+  const beginConnect = (e: React.PointerEvent, fromId: string) => {
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    connectDragRef.current = { fromId };
+    setConnectPreview({ fromId, ...relPoint(e) });
+  };
+  const onConnectMove = (e: React.PointerEvent) => {
+    if (!connectDragRef.current) return;
+    setConnectPreview({ fromId: connectDragRef.current.fromId, ...relPoint(e) });
+  };
+  const endConnect = (e: React.PointerEvent) => {
+    const d = connectDragRef.current;
+    connectDragRef.current = null;
+    setConnectPreview(null);
+    if (!d) return;
+    let targetId: string | null = null;
+    barRefs.current.forEach((el, id) => {
+      if (id === d.fromId || targetId) return;
+      const rect = el.getBoundingClientRect();
+      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        targetId = id;
+      }
+    });
+    if (!targetId) return;
+    setDepError("");
+    startDep(async () => {
+      try {
+        await addDependency(d.fromId, targetId!);
+      } catch (err) {
+        setDepError(err instanceof Error ? err.message : "Failed to link.");
+      }
+    });
+  };
+
   if (rows.length === 0) {
     return <div className="mt-16 text-center text-sm text-text-muted">No projects yet.</div>;
   }
 
   return (
     <div className="flex-1 overflow-auto">
+      {depError && <p className="px-6 pt-3 text-sm text-danger">{depError}</p>}
       <div className="flex" style={{ width: 280 + chartWidth }}>
         <div className="w-[280px] shrink-0">
           <div className="h-9 border-b border-border" />
@@ -1571,39 +1789,415 @@ function TimelineView({
               </div>
             ))}
           </div>
-          <div className="relative" style={{ height: rows.length * TIMELINE_ROW_HEIGHT }}>
+          <div ref={containerRef} className="relative" style={{ height: rows.length * TIMELINE_ROW_HEIGHT }}>
             <div className="pointer-events-none absolute inset-y-0 border-l border-accent/50" style={{ left: todayLeft }} />
-            {rows.map((r, i) => {
-              if (!r.start || !r.end) return null;
-              const left = Math.max(0, dayOffset(r.start)) * TIMELINE_PX_PER_DAY;
-              const right = Math.min(totalDays, dayOffset(r.end)) * TIMELINE_PX_PER_DAY;
-              const width = Math.max(6, right - left);
-              const top = i * TIMELINE_ROW_HEIGHT + (r.isGroup ? 11 : 5);
-              const height = r.isGroup ? 10 : TIMELINE_ROW_HEIGHT - 10;
+
+            <svg
+              className="pointer-events-none absolute inset-0 overflow-visible text-text-muted"
+              width={chartWidth}
+              height={rows.length * TIMELINE_ROW_HEIGHT}
+            >
+              <defs>
+                <marker id="dep-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0L10,5L0,10z" fill="currentColor" />
+                </marker>
+              </defs>
+              {dependencyPaths.map((p, i) => (
+                <path key={i} d={p} stroke="currentColor" strokeWidth="1.5" fill="none" markerEnd="url(#dep-arrow)" />
+              ))}
+              {connectPreview &&
+                barGeom.get(connectPreview.fromId) &&
+                (() => {
+                  const from = barGeom.get(connectPreview.fromId)!;
+                  const x1 = from.left + from.width;
+                  const y1 = from.top + from.height / 2;
+                  return (
+                    <path
+                      d={`M ${x1} ${y1} L ${connectPreview.x} ${connectPreview.y}`}
+                      stroke="currentColor"
+                      className="text-accent"
+                      strokeWidth="2"
+                      strokeDasharray="4 3"
+                      fill="none"
+                      markerEnd="url(#dep-arrow)"
+                    />
+                  );
+                })()}
+            </svg>
+
+            {rows.map((r) => {
+              const geom = barGeom.get(r.id);
+              if (!geom) return null;
               return (
-                <button
+                <div
                   key={r.id}
-                  onClick={() => onSelect(r.id)}
-                  title={r.name}
-                  className={`absolute overflow-hidden rounded-full text-left text-[11px] font-medium text-white ${
-                    r.isGroup ? "bg-slate-700" : r.status ? STATUS_META[r.status].bg : "bg-text-muted"
-                  }`}
-                  style={{ left, width, top, height }}
+                  ref={(el) => {
+                    if (el) barRefs.current.set(r.id, el);
+                    else barRefs.current.delete(r.id);
+                  }}
+                  className="group absolute"
+                  style={{ left: geom.left, top: geom.top, width: geom.width, height: geom.height }}
                 >
+                  <button
+                    onClick={() => onSelect(r.id)}
+                    title={r.name}
+                    className={`absolute inset-0 overflow-hidden rounded-full text-left text-[11px] font-medium text-white ${
+                      r.isGroup ? "bg-slate-700" : r.status ? STATUS_META[r.status].bg : "bg-text-muted"
+                    }`}
+                  >
+                    {!r.isGroup && (
+                      <span
+                        className="absolute inset-y-0 left-0 rounded-full bg-black/25"
+                        style={{ width: `${Math.max(0, Math.min(100, r.progress))}%` }}
+                      />
+                    )}
+                    <span className="relative flex h-full items-center overflow-hidden text-ellipsis whitespace-nowrap px-2.5">
+                      {r.name}
+                    </span>
+                  </button>
                   {!r.isGroup && (
-                    <span
-                      className="absolute inset-y-0 left-0 rounded-full bg-black/25"
-                      style={{ width: `${Math.max(0, Math.min(100, r.progress))}%` }}
+                    <div
+                      role="button"
+                      aria-label={`Drag to link ${r.name} to another item`}
+                      title="Drag to link a dependency"
+                      onPointerDown={(e) => beginConnect(e, r.id)}
+                      onPointerMove={onConnectMove}
+                      onPointerUp={(e) => endConnect(e)}
+                      className="absolute -right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 cursor-crosshair touch-none rounded-full border-2 border-surface bg-accent opacity-0 group-hover:opacity-100"
                     />
                   )}
-                  <span className="relative flex h-full items-center overflow-hidden text-ellipsis whitespace-nowrap px-2.5">
-                    {r.name}
-                  </span>
-                </button>
+                </div>
               );
             })}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+const LOG_STATUS_DEFAULTS = ["Completed", "In Progress", "Pending", "Blocker", "N/A"];
+const LOG_STATUS_BADGE: Record<string, string> = {
+  Completed: "bg-success text-black",
+  "In Progress": "bg-info text-white",
+  Pending: "bg-warning text-black",
+  Blocker: "bg-danger text-white",
+  "N/A": "bg-text-muted text-white",
+};
+function logStatusBadgeClass(status: string) {
+  return LOG_STATUS_BADGE[status] ?? "border border-border bg-transparent text-text";
+}
+
+function nodeAncestorPath(nodeId: string, nodes: NodeT[]): string {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const node = byId.get(nodeId);
+  if (!node) return "Unknown item";
+  if (!node.parentId) return node.name;
+  let root = node;
+  while (root.parentId) {
+    const parent = byId.get(root.parentId);
+    if (!parent) break;
+    root = parent;
+  }
+  return `${root.name} › ${node.name}`;
+}
+
+const LOG_GRID = "112px 190px minmax(220px,1.4fr) 120px 140px 140px minmax(180px,1.4fr) 40px";
+
+type LogFormState = {
+  date: string;
+  nodeId: string;
+  activity: string;
+  owner: string;
+  waitingOn: string;
+  status: string;
+  remarks: string;
+};
+
+function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[] }) {
+  const [, start] = useTransition();
+  const [filterNodeId, setFilterNodeId] = useState("");
+  const [error, setError] = useState("");
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const emptyForm: LogFormState = { date: todayStr, nodeId: "", activity: "", owner: "", waitingOn: "", status: "", remarks: "" };
+  const [addForm, setAddForm] = useState<LogFormState>(emptyForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<LogFormState>(emptyForm);
+
+  const pickerOptions = useMemo(() => flattenTree(nodes), [nodes]);
+  const statusOptions = useMemo(() => {
+    const set = new Set(LOG_STATUS_DEFAULTS);
+    for (const l of logEntries) if (l.status) set.add(l.status);
+    return Array.from(set);
+  }, [logEntries]);
+
+  const filtered = filterNodeId ? logEntries.filter((l) => l.nodeId === filterNodeId) : logEntries;
+
+  const submitAdd = () => {
+    if (!addForm.nodeId || !addForm.activity.trim()) {
+      setError("Item and Activity are required.");
+      return;
+    }
+    setError("");
+    start(async () => {
+      try {
+        await createLogEntry(addForm.nodeId, {
+          date: addForm.date,
+          activity: addForm.activity,
+          owner: addForm.owner,
+          waitingOn: addForm.waitingOn,
+          status: addForm.status,
+          remarks: addForm.remarks,
+        });
+        setAddForm({ ...emptyForm, date: addForm.date, nodeId: addForm.nodeId });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to add entry.");
+      }
+    });
+  };
+
+  const beginEdit = (entry: LogEntryT) => {
+    setError("");
+    setEditingId(entry.id);
+    setEditForm({
+      date: entry.date,
+      nodeId: entry.nodeId,
+      activity: entry.activity,
+      owner: entry.owner,
+      waitingOn: entry.waitingOn,
+      status: entry.status,
+      remarks: entry.remarks,
+    });
+  };
+
+  const submitEdit = () => {
+    if (!editingId) return;
+    if (!editForm.nodeId || !editForm.activity.trim()) {
+      setError("Item and Activity are required.");
+      return;
+    }
+    setError("");
+    const id = editingId;
+    start(async () => {
+      try {
+        await updateLogEntry(id, editForm);
+        setEditingId(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save entry.");
+      }
+    });
+  };
+
+  const remove = (id: string) => {
+    if (!confirm("Delete this log entry?")) return;
+    start(() => deleteLogEntry(id));
+  };
+
+  return (
+    <div className="flex-1 overflow-auto px-6 py-5">
+      <div className="mb-3 flex items-center gap-3">
+        <label className="text-xs font-semibold uppercase tracking-wider text-text-muted">Filter by item</label>
+        <select className="field w-64" value={filterNodeId} onChange={(e) => setFilterNodeId(e.target.value)}>
+          <option value="">All items</option>
+          {pickerOptions.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {error && <p className="mb-2 text-sm text-danger">{error}</p>}
+
+      <datalist id="log-status-options">
+        {statusOptions.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
+
+      <div style={{ minWidth: 1180 }}>
+        <div
+          className="sticky top-0 z-10 grid divide-x divide-border items-center rounded-t-lg border border-border bg-bg text-[11px] font-semibold uppercase tracking-wider text-text-muted"
+          style={{ gridTemplateColumns: LOG_GRID }}
+        >
+          <div className="px-3 py-2">Date</div>
+          <div className="px-3 py-2">Item</div>
+          <div className="px-3 py-2">Activity / Milestone</div>
+          <div className="px-3 py-2">Owner</div>
+          <div className="px-3 py-2">Waiting on</div>
+          <div className="px-3 py-2">Status</div>
+          <div className="px-3 py-2">Remarks</div>
+          <span />
+        </div>
+
+        <div
+          className="grid items-center gap-2 border-x border-b border-border bg-accent/5 p-2"
+          style={{ gridTemplateColumns: LOG_GRID }}
+        >
+          <input
+            type="date"
+            className="field text-xs"
+            value={addForm.date}
+            onChange={(e) => setAddForm({ ...addForm, date: e.target.value })}
+          />
+          <select
+            className="field text-xs"
+            value={addForm.nodeId}
+            onChange={(e) => setAddForm({ ...addForm, nodeId: e.target.value })}
+          >
+            <option value="">Pick item…</option>
+            {pickerOptions.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <input
+            className="field text-xs"
+            placeholder="Activity / milestone"
+            value={addForm.activity}
+            onChange={(e) => setAddForm({ ...addForm, activity: e.target.value })}
+          />
+          <input
+            className="field text-xs"
+            placeholder="Owner"
+            value={addForm.owner}
+            onChange={(e) => setAddForm({ ...addForm, owner: e.target.value })}
+          />
+          <input
+            className="field text-xs"
+            placeholder="Waiting on"
+            value={addForm.waitingOn}
+            onChange={(e) => setAddForm({ ...addForm, waitingOn: e.target.value })}
+          />
+          <input
+            list="log-status-options"
+            className="field text-xs"
+            placeholder="Status"
+            value={addForm.status}
+            onChange={(e) => setAddForm({ ...addForm, status: e.target.value })}
+          />
+          <input
+            className="field text-xs"
+            placeholder="Remarks"
+            value={addForm.remarks}
+            onChange={(e) => setAddForm({ ...addForm, remarks: e.target.value })}
+          />
+          <div className="flex justify-center">
+            <button className="btn-primary px-2 py-1.5 text-xs" onClick={submitAdd}>
+              Save
+            </button>
+          </div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div className="rounded-b-lg border-x border-b border-border bg-surface py-10 text-center text-sm text-text-muted">
+            No log entries yet.
+          </div>
+        ) : (
+          filtered.map((entry, idx) =>
+            editingId === entry.id ? (
+              <div
+                key={entry.id}
+                className={`grid items-center gap-2 border-x border-b border-border bg-accent/5 p-2 ${
+                  idx === filtered.length - 1 ? "rounded-b-lg" : ""
+                }`}
+                style={{ gridTemplateColumns: LOG_GRID }}
+              >
+                <input
+                  type="date"
+                  className="field text-xs"
+                  value={editForm.date}
+                  onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+                />
+                <select
+                  className="field text-xs"
+                  value={editForm.nodeId}
+                  onChange={(e) => setEditForm({ ...editForm, nodeId: e.target.value })}
+                >
+                  {pickerOptions.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="field text-xs"
+                  value={editForm.activity}
+                  onChange={(e) => setEditForm({ ...editForm, activity: e.target.value })}
+                />
+                <input
+                  className="field text-xs"
+                  value={editForm.owner}
+                  onChange={(e) => setEditForm({ ...editForm, owner: e.target.value })}
+                />
+                <input
+                  className="field text-xs"
+                  value={editForm.waitingOn}
+                  onChange={(e) => setEditForm({ ...editForm, waitingOn: e.target.value })}
+                />
+                <input
+                  list="log-status-options"
+                  className="field text-xs"
+                  value={editForm.status}
+                  onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                />
+                <input
+                  className="field text-xs"
+                  value={editForm.remarks}
+                  onChange={(e) => setEditForm({ ...editForm, remarks: e.target.value })}
+                />
+                <div className="flex justify-center gap-1.5">
+                  <button aria-label="Save entry" className="text-text-muted hover:text-accent" onClick={submitEdit}>
+                    ✓
+                  </button>
+                  <button
+                    aria-label="Cancel edit"
+                    className="text-text-muted hover:text-danger"
+                    onClick={() => setEditingId(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                key={entry.id}
+                className={`group grid cursor-pointer items-center border-x border-b border-border bg-surface hover:bg-bg ${
+                  idx === filtered.length - 1 ? "rounded-b-lg" : ""
+                }`}
+                style={{ gridTemplateColumns: LOG_GRID }}
+                onClick={() => beginEdit(entry)}
+              >
+                <div className="figure px-3 py-2 text-xs text-text-muted">{fmtDate(entry.date)}</div>
+                <div className="truncate px-3 py-2 text-sm">{nodeAncestorPath(entry.nodeId, nodes)}</div>
+                <div className="truncate px-3 py-2 text-sm">{entry.activity}</div>
+                <div className="truncate px-3 py-2 text-sm text-text-muted">{entry.owner || "—"}</div>
+                <div className="truncate px-3 py-2 text-sm text-text-muted">{entry.waitingOn || "—"}</div>
+                <div className="px-3 py-2">
+                  {entry.status ? (
+                    <span className={`badge ${logStatusBadgeClass(entry.status)}`}>{entry.status}</span>
+                  ) : (
+                    <span className="text-sm text-text-muted">—</span>
+                  )}
+                </div>
+                <div className="truncate px-3 py-2 text-sm text-text-muted">{entry.remarks || "—"}</div>
+                <div
+                  className="flex justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    aria-label="Delete entry"
+                    className="text-xs text-text-muted hover:text-danger"
+                    onClick={() => remove(entry.id)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )
+          )
+        )}
       </div>
     </div>
   );

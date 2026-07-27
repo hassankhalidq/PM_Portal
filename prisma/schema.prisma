@@ -71,6 +71,9 @@ model ProjectNode {
   children    ProjectNode[] @relation("Tree")
   comments    Comment[]
   attachments Attachment[]
+  logEntries  LogEntry[]
+  dependsOn   ItemDependency[] @relation("DependencySuccessor")
+  blocks      ItemDependency[] @relation("DependencyPredecessor")
   sortOrder   Int           @default(0)
   board       Board?        @relation(fields: [boardId], references: [id], onDelete: Cascade)
   boardId     String?
@@ -79,6 +82,42 @@ model ProjectNode {
 
   @@index([parentId])
   @@index([boardId])
+}
+
+// A running, spreadsheet-style daily update log, mapped to either a whole
+// project or one of its sub-items. Distinct from Comment (informal,
+// single-node, no board-wide browsing view).
+model LogEntry {
+  id        String      @id @default(cuid())
+  date      DateTime
+  activity  String
+  owner     String      @default("")
+  waitingOn String      @default("")
+  status    String      @default("")
+  remarks   String      @default("")
+  node      ProjectNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  nodeId    String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([nodeId])
+}
+
+// Real item-to-item dependency (predecessor must finish before successor
+// starts), rendered as arrows on the Project Timeline. Deliberately not
+// named "dependency" on either side of the relation, to stay visually and
+// verbally distinct from LogEntry.waitingOn.
+model ItemDependency {
+  id            String      @id @default(cuid())
+  predecessor   ProjectNode @relation("DependencyPredecessor", fields: [predecessorId], references: [id], onDelete: Cascade)
+  predecessorId String
+  successor     ProjectNode @relation("DependencySuccessor", fields: [successorId], references: [id], onDelete: Cascade)
+  successorId   String
+  createdAt     DateTime    @default(now())
+
+  @@unique([predecessorId, successorId])
+  @@index([predecessorId])
+  @@index([successorId])
 }
 
 model Attachment {

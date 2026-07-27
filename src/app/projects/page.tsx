@@ -34,6 +34,20 @@ export default async function ProjectsPage({
       })
     : [];
 
+  const [logEntries, dependencies] = currentBoard
+    ? await Promise.all([
+        prisma.logEntry.findMany({
+          where: { node: { boardId: currentBoard.id } },
+          orderBy: { date: "desc" },
+          include: { node: { select: { id: true, name: true, parentId: true } } },
+        }),
+        prisma.itemDependency.findMany({
+          where: { predecessor: { boardId: currentBoard.id } },
+          select: { id: true, predecessorId: true, successorId: true },
+        }),
+      ])
+    : [[], []];
+
   const serialized = nodes.map((n) => ({
     id: n.id,
     name: n.name,
@@ -60,12 +74,27 @@ export default async function ProjectsPage({
     })),
   }));
 
+  const serializedLogEntries = logEntries.map((l) => ({
+    id: l.id,
+    date: l.date.toISOString().slice(0, 10),
+    activity: l.activity,
+    owner: l.owner,
+    waitingOn: l.waitingOn,
+    status: l.status,
+    remarks: l.remarks,
+    nodeId: l.nodeId,
+    nodeName: l.node.name,
+    nodeParentId: l.node.parentId,
+  }));
+
   return (
     <Shell active="projects" userName={session?.user?.name ?? ""} role={role}>
       <ProjectBoard
         nodes={serialized}
         boards={boards.map((b) => ({ id: b.id, name: b.name, description: b.description, isDefault: b.isDefault }))}
         currentBoardId={currentBoard?.id ?? ""}
+        logEntries={serializedLogEntries}
+        dependencies={dependencies}
       />
     </Shell>
   );
