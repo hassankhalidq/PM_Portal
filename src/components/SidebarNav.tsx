@@ -87,7 +87,7 @@ export default function SidebarNav({
           <span className="text-lg font-bold text-accent">H</span>
         ) : (
           <div className="min-w-0">
-            <p className="truncate text-lg font-semibold leading-tight text-accent">SahulatPay</p>
+            <p className="truncate text-lg font-semibold leading-tight text-accent">Huzzah</p>
             <p className="text-xs font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
           </div>
         )}

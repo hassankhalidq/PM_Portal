@@ -199,7 +199,7 @@ function NewUserForm({ onDone, onError }: { onDone: () => void; onError: (s: str
           <label className="mb-1 block text-[13px] font-medium">Email</label>
           <input
             className="field"
-            placeholder="name@sahulatpay.com"
+            placeholder="name@company.com"
             type="email"
             autoComplete="off"
             value={form.email}

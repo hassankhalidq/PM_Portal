@@ -5,7 +5,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <p className="text-2xl font-semibold text-accent">SahulatPay</p>
+          <p className="text-2xl font-semibold text-accent">Huzzah</p>
           <p className="text-sm font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
         </div>
         <div className="rounded-2xl border border-border bg-surface p-6 shadow-sm">
