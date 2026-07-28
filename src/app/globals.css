@@ -8,9 +8,9 @@
   --surface: #FFFFFF;
   --text: #18181B;
   --border: #E4E4E7;
-  --accent-hover: #4338CA;
+  --accent-hover: #3F6212;
   --text-muted-rgb: 113 113 122;
-  --accent-rgb: 79 70 229;
+  --accent-rgb: 77 124 15;
   --success-rgb: 22 163 74;
   --danger-rgb: 220 38 38;
   --info-rgb: 37 99 235;
@@ -22,10 +22,10 @@
   --bg: #0B0B0F;
   --surface: #151519;
   --text: #F4F4F5;
-  --border: #27272A;
-  --accent-hover: #A5B4FC;
+  --border: #3A3A42;
+  --accent-hover: #BEF264;
   --text-muted-rgb: 161 161 170;
-  --accent-rgb: 129 140 248;
+  --accent-rgb: 163 230 53;
   --success-rgb: 34 197 94;
   --danger-rgb: 248 113 113;
   --info-rgb: 96 165 250;
@@ -60,11 +60,27 @@ body {
 }
 
 .btn-primary {
-  @apply btn bg-accent text-white hover:bg-accent-hover;
+  @apply btn bg-accent hover:bg-accent-hover;
+  color: #fff;
+}
+
+.dark .btn-primary {
+  color: #0b0b0f;
 }
 
 .btn-ghost {
   @apply btn border border-border bg-transparent text-text hover:bg-bg;
+}
+
+/* The accent hue is bright enough in dark mode that white text on a solid
+   accent background fails contrast — use this instead of `text-white`
+   anywhere text sits on a solid `bg-accent` fill. */
+.on-accent {
+  color: #fff;
+}
+
+.dark .on-accent {
+  color: #0b0b0f;
 }
 
 .badge {

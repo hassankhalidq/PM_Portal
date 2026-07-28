@@ -656,7 +656,7 @@ function FiltersPopover({
       <button className="btn-ghost" onClick={() => setOpen((o) => !o)}>
         Filters
         {activeCount > 0 && (
-          <span className="figure flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] text-white">
+          <span className="on-accent figure flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px]">
             {activeCount}
           </span>
         )}
@@ -864,7 +864,7 @@ function GroupHeader({
           >
             {node.name}
           </button>
-          <span className="figure shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] text-white">{count}</span>
+          <span className="on-accent figure shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px]">{count}</span>
         </div>
         <div />
         <div />

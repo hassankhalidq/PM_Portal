@@ -503,7 +503,7 @@ export default function RoadmapBoard({
               <GridLines segments={headerSegments} x={x} />
               <TodayLine x={x(today)} />
               <span
-                className="figure absolute -top-1 z-20 -translate-x-1/2 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-semibold text-white"
+                className="on-accent figure absolute -top-1 z-20 -translate-x-1/2 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-semibold"
                 style={{ left: x(today) }}
               >
                 Today
