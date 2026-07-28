@@ -575,14 +575,13 @@ export default function RoadmapBoard({
               <button
                 onClick={() => toggleCategory(c.id)}
                 title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
-                className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border bg-surface px-4 text-left hover:bg-bg ${
+                className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border px-4 text-left hover:brightness-110 ${
                   hiddenCategories.has(c.id) ? "opacity-50" : ""
                 }`}
-                style={{ minHeight: Math.max(56, c.items.length * 38 + 22) }}
+                style={{ minHeight: Math.max(56, c.items.length * 38 + 22), background: c.color }}
               >
-                <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: c.color }} />
                 <span
-                  className={`truncate text-sm font-medium ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
+                  className={`truncate text-sm font-medium text-white ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
                 >
                   {c.name}
                 </span>

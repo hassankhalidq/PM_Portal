@@ -82,10 +82,8 @@ export default function SidebarNav({
   };
 
   return (
-    <aside
-      className={`sticky top-0 flex h-screen shrink-0 flex-col overflow-hidden border-r border-border bg-surface ${
-        mounted ? TRANSITION : ""
-      }`}
+    <div
+      className={`sticky top-0 relative h-screen shrink-0 ${mounted ? TRANSITION : ""}`}
       style={{ width: collapsed ? 64 : 224 }}
     >
       <button
@@ -109,18 +107,24 @@ export default function SidebarNav({
         </svg>
       </button>
 
-      <div className="flex items-center gap-3 border-b border-border px-4 py-5">
-        <span className="shrink-0 text-lg font-bold text-accent">H</span>
-        <div
-          className={`min-w-0 overflow-hidden whitespace-nowrap ${TRANSITION}`}
-          style={{ maxWidth: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
-        >
-          <p className="truncate text-lg font-semibold leading-tight text-accent">Huzzah</p>
-          <p className="text-xs font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
+      <aside className="flex h-full flex-col overflow-hidden border-r border-border bg-surface">
+        <div className="flex items-center gap-3 border-b border-border px-4 py-5">
+          <span
+            className={`shrink-0 overflow-hidden text-lg font-bold text-accent ${TRANSITION}`}
+            style={{ maxWidth: collapsed ? 24 : 0, opacity: collapsed ? 1 : 0 }}
+          >
+            H
+          </span>
+          <div
+            className={`min-w-0 overflow-hidden whitespace-nowrap ${TRANSITION}`}
+            style={{ maxWidth: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
+          >
+            <p className="truncate text-lg font-semibold leading-tight text-accent">Huzzah</p>
+            <p className="text-xs font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
+          </div>
         </div>
-      </div>
 
-      <nav className="flex flex-1 flex-col gap-1 p-3">
+        <nav className="flex flex-1 flex-col gap-1 p-3">
         {NAV_ITEMS.map((item) => {
           if (item.key === "admin" && role !== "ADMIN") return null;
           const isActive = active === item.key;
@@ -155,22 +159,23 @@ export default function SidebarNav({
             </Link>
           );
         })}
-      </nav>
+        </nav>
 
-      <div className="border-t border-border p-3">
-        <div
-          className={`overflow-hidden ${TRANSITION}`}
-          style={{ maxHeight: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
-        >
-          <ThemeToggle />
-          <p className="truncate px-3 pb-2 text-xs text-text-muted">{userName}</p>
-          <form action={logout}>
-            <button className="btn-ghost w-full justify-center text-text-muted" type="submit">
-              Log out
-            </button>
-          </form>
+        <div className="border-t border-border p-3">
+          <div
+            className={`overflow-hidden ${TRANSITION}`}
+            style={{ maxHeight: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
+          >
+            <ThemeToggle />
+            <p className="truncate px-3 pb-2 text-xs text-text-muted">{userName}</p>
+            <form action={logout}>
+              <button className="btn-ghost w-full justify-center text-text-muted" type="submit">
+                Log out
+              </button>
+            </form>
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </div>
   );
 }
