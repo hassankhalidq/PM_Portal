@@ -110,7 +110,7 @@ type Panel =
   | { kind: "lanes" }
   | null;
 
-type ZoomBand = "quarterly" | "mixed" | "monthly";
+type ZoomBand = "quarterly" | "mixed" | "monthly" | "daily";
 
 type DragState =
   | { kind: "milestone"; id: string; startX: number; origDate: number; moved: boolean }
@@ -171,10 +171,25 @@ export default function RoadmapBoard({
     return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
   }, []);
 
-  const zoomBand: ZoomBand = pxPerDay <= 5 ? "quarterly" : pxPerDay <= 8 ? "mixed" : "monthly";
+  const zoomBand: ZoomBand =
+    pxPerDay <= 5 ? "quarterly" : pxPerDay <= 8 ? "mixed" : pxPerDay <= 16 ? "monthly" : "daily";
 
   // "Now" window = current quarter + next quarter (monthly headers); beyond = "Later" (quarterly). Mixed band only.
   const seam = useMemo(() => addMonths(startOfQuarter(today), 6), [today]);
+
+  // Tracks the scrollable area's own width so the date range below can be
+  // stretched to fill it — otherwise a short data range at a very zoomed-out
+  // setting leaves visible dead space past the last column instead of using
+  // the screen.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => setContainerWidth(entries[0].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const [rangeStart, rangeEnd] = useMemo(() => {
     let min = startOfQuarter(today);
@@ -187,8 +202,17 @@ export default function RoadmapBoard({
       min = Math.min(min, parse(m.date));
       max = Math.max(max, parse(m.date));
     }
-    return [startOfQuarter(min), addMonths(startOfQuarter(max), 3)];
-  }, [allItems, milestones, today]);
+    const start = startOfQuarter(min);
+    let end = addMonths(startOfQuarter(max), 3);
+    if (containerWidth > 0) {
+      const neededDays = Math.ceil(containerWidth / pxPerDay);
+      const currentDays = Math.round((end - start) / DAY);
+      if (currentDays < neededDays) {
+        end = addMonths(startOfQuarter(start + neededDays * DAY), 3);
+      }
+    }
+    return [start, end];
+  }, [allItems, milestones, today, containerWidth, pxPerDay]);
 
   const totalDays = Math.round((rangeEnd - rangeStart) / DAY);
   const width = totalDays * pxPerDay;
@@ -214,6 +238,18 @@ export default function RoadmapBoard({
         const next = Math.min(addMonths(cursor, 1), rangeEnd);
         const d = new Date(cursor);
         segs.push({ label: `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`, from: cursor, to: next, zone: "now" });
+        cursor = next;
+      }
+      return segs;
+    }
+
+    if (zoomBand === "daily") {
+      while (cursor < rangeEnd) {
+        const next = Math.min(cursor + DAY, rangeEnd);
+        const d = new Date(cursor);
+        const dayNum = d.getUTCDate();
+        const label = dayNum === 1 ? `${MONTHS[d.getUTCMonth()]} 1` : String(dayNum);
+        segs.push({ label, from: cursor, to: next, zone: "now" });
         cursor = next;
       }
       return segs;
@@ -441,7 +477,7 @@ export default function RoadmapBoard({
           <input
             type="range"
             min={2}
-            max={12}
+            max={32}
             step={1}
             value={pxPerDay}
             onChange={(e) => setPxPerDay(Number(e.target.value))}
@@ -463,8 +499,12 @@ export default function RoadmapBoard({
         </button>
       </header>
 
-      <div className="roadmap-content flex-1 overflow-auto" style={{ ["--roadmap-tint" as string]: activeTheme.bgTint }}>
-        <div className="min-w-max">
+      <div
+        ref={scrollRef}
+        className="roadmap-content flex-1 overflow-auto"
+        style={{ ["--roadmap-tint" as string]: activeTheme.bgTint }}
+      >
+        <div className="min-w-full w-max">
           {/* Header rail */}
           <div className="sticky top-0 z-20 flex border-b border-border bg-surface">
             <div className="sticky left-0 z-30 w-44 shrink-0 border-r border-border bg-surface px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-text-muted">
@@ -525,17 +565,19 @@ export default function RoadmapBoard({
           </div>
 
           {/* Category swimlanes */}
-          {categories.map((c) => (
+          {categories.map((c, laneIdx) => (
             <div
               key={c.id}
               className={`flex border-b border-border/70 ${
-                hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""
+                laneIdx < categories.length - 1 ? "mb-3" : ""
               }`}
             >
               <button
                 onClick={() => toggleCategory(c.id)}
-                title="Click to show/hide this lane"
-                className="sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border bg-surface px-4 text-left hover:bg-bg"
+                title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
+                className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border bg-surface px-4 text-left hover:bg-bg ${
+                  hiddenCategories.has(c.id) ? "opacity-50" : ""
+                }`}
                 style={{ minHeight: Math.max(56, c.items.length * 38 + 22) }}
               >
                 <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: c.color }} />
@@ -546,7 +588,7 @@ export default function RoadmapBoard({
                 </span>
               </button>
               <div
-                className="relative"
+                className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
                 style={{ width, minHeight: Math.max(56, c.items.length * 38 + 22) }}
               >
                 <GridLines segments={headerSegments} x={x} />

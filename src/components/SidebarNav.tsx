@@ -54,6 +54,8 @@ const NAV_ITEMS: { key: Active; href: string; label: string; icon: React.ReactNo
   },
 ];
 
+const TRANSITION = "transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]";
+
 export default function SidebarNav({
   active,
   userName,
@@ -64,9 +66,11 @@ export default function SidebarNav({
   role?: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     if (localStorage.getItem("sidebar-collapsed") === "1") setCollapsed(true);
+    setMounted(true);
   }, []);
 
   const toggleCollapsed = () => {
@@ -79,18 +83,41 @@ export default function SidebarNav({
 
   return (
     <aside
-      className="sticky top-0 flex h-screen shrink-0 flex-col overflow-hidden border-r border-border bg-surface transition-[width] duration-300 ease-in-out"
+      className={`sticky top-0 flex h-screen shrink-0 flex-col overflow-hidden border-r border-border bg-surface ${
+        mounted ? TRANSITION : ""
+      }`}
       style={{ width: collapsed ? 64 : 224 }}
     >
-      <div className={`flex items-center border-b border-border px-4 py-5 ${collapsed ? "justify-center px-0" : ""}`}>
-        {collapsed ? (
-          <span className="text-lg font-bold text-accent">H</span>
-        ) : (
-          <div className="min-w-0">
-            <p className="truncate text-lg font-semibold leading-tight text-accent">Huzzah</p>
-            <p className="text-xs font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
-          </div>
-        )}
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+        title={collapsed ? "Expand menu" : "Collapse menu"}
+        className={`focus-ring absolute top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-surface text-text-muted shadow-sm hover:text-text ${TRANSITION}`}
+        style={{ left: collapsed ? 64 - 12 : 224 - 12 }}
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          style={{ transform: collapsed ? "rotate(180deg)" : "none", transition: "transform 0.3s cubic-bezier(0.4,0,0.2,1)" }}
+        >
+          <path d="M15 5l-7 7 7 7" />
+        </svg>
+      </button>
+
+      <div className="flex items-center gap-3 border-b border-border px-4 py-5">
+        <span className="shrink-0 text-lg font-bold text-accent">H</span>
+        <div
+          className={`min-w-0 overflow-hidden whitespace-nowrap ${TRANSITION}`}
+          style={{ maxWidth: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
+        >
+          <p className="truncate text-lg font-semibold leading-tight text-accent">Huzzah</p>
+          <p className="text-xs font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
+        </div>
       </div>
 
       <nav className="flex flex-1 flex-col gap-1 p-3">
@@ -101,11 +128,12 @@ export default function SidebarNav({
             <Link
               key={item.key}
               href={item.href}
+              prefetch={false}
               title={item.label}
               aria-label={item.label}
               className={`focus-ring flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${
-                collapsed ? "justify-center px-2" : ""
-              } ${isActive ? "bg-accent/10 text-accent" : "text-text-muted hover:bg-bg hover:text-text"}`}
+                isActive ? "bg-accent/10 text-accent" : "text-text-muted hover:bg-bg hover:text-text"
+              }`}
             >
               <svg
                 width="18"
@@ -118,43 +146,30 @@ export default function SidebarNav({
               >
                 {item.icon}
               </svg>
-              {!collapsed && <span>{item.label}</span>}
+              <span
+                className={`overflow-hidden whitespace-nowrap ${TRANSITION}`}
+                style={{ maxWidth: collapsed ? 0 : 140, opacity: collapsed ? 0 : 1 }}
+              >
+                {item.label}
+              </span>
             </Link>
           );
         })}
       </nav>
 
       <div className="border-t border-border p-3">
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? "Expand menu" : "Collapse menu"}
-          title={collapsed ? "Expand menu" : "Collapse menu"}
-          className="focus-ring mb-2 flex w-full items-center justify-center rounded-lg bg-transparent p-2 text-text-muted hover:bg-bg"
+        <div
+          className={`overflow-hidden ${TRANSITION}`}
+          style={{ maxHeight: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            style={{ transform: collapsed ? "rotate(180deg)" : "none", transition: "transform 0.28s cubic-bezier(0.4,0,0.2,1)" }}
-          >
-            <path d="M15 5l-7 7 7 7" />
-          </svg>
-        </button>
-        {!collapsed && (
-          <>
-            <ThemeToggle />
-            <p className="truncate px-3 pb-2 text-xs text-text-muted">{userName}</p>
-            <form action={logout}>
-              <button className="btn-ghost w-full justify-center text-text-muted" type="submit">
-                Log out
-              </button>
-            </form>
-          </>
-        )}
+          <ThemeToggle />
+          <p className="truncate px-3 pb-2 text-xs text-text-muted">{userName}</p>
+          <form action={logout}>
+            <button className="btn-ghost w-full justify-center text-text-muted" type="submit">
+              Log out
+            </button>
+          </form>
+        </div>
       </div>
     </aside>
   );
