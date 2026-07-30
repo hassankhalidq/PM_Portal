@@ -27,7 +27,7 @@ export default async function RoadmapPage({
           orderBy: { sortOrder: "asc" },
           include: { items: { orderBy: [{ sortOrder: "asc" }, { startDate: "asc" }] } },
         }),
-        prisma.milestone.findMany({ where: { roadmapId: currentRoadmap.id }, orderBy: { date: "asc" } }),
+        prisma.milestone.findMany({ where: { roadmapId: currentRoadmap.id }, orderBy: { sortOrder: "asc" } }),
       ])
     : [[], []];
 
@@ -48,6 +48,7 @@ export default async function RoadmapPage({
             startDate: i.startDate.toISOString().slice(0, 10),
             endDate: i.endDate.toISOString().slice(0, 10),
             categoryId: i.categoryId,
+            sortOrder: i.sortOrder,
           })),
         }))}
         milestones={milestones.map((m) => ({
@@ -56,6 +57,8 @@ export default async function RoadmapPage({
           type: m.type,
           date: m.date.toISOString().slice(0, 10),
           description: m.description,
+          categoryId: m.categoryId,
+          sortOrder: m.sortOrder,
         }))}
       />
     </Shell>

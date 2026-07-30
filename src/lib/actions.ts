@@ -451,11 +451,15 @@ export async function updateItem(
   revalidatePath("/roadmap");
 }
 
-export async function reorderItems(categoryId: string, orderedIds: string[]) {
+// Reorders a mixed lane of items and milestones together — both share one
+// sortOrder sequence per categoryId so they can be freely interleaved.
+export async function reorderLane(categoryId: string, entries: { id: string; kind: "item" | "milestone" }[]) {
   await requireSession();
   await prisma.$transaction(
-    orderedIds.map((id, index) =>
-      prisma.roadmapItem.update({ where: { id }, data: { sortOrder: index } })
+    entries.map(({ id, kind }, index) =>
+      kind === "item"
+        ? prisma.roadmapItem.update({ where: { id }, data: { sortOrder: index } })
+        : prisma.milestone.update({ where: { id }, data: { sortOrder: index } })
     )
   );
   revalidatePath("/roadmap");
@@ -473,9 +477,15 @@ export async function createMilestone(data: {
   date: string;
   description: string;
   roadmapId: string;
+  categoryId: string;
 }) {
   await requireSession();
   if (!data.name.trim()) return;
+  const [maxItem, maxMs] = await Promise.all([
+    prisma.roadmapItem.aggregate({ where: { categoryId: data.categoryId }, _max: { sortOrder: true } }),
+    prisma.milestone.aggregate({ where: { categoryId: data.categoryId }, _max: { sortOrder: true } }),
+  ]);
+  const nextOrder = Math.max(maxItem._max.sortOrder ?? -1, maxMs._max.sortOrder ?? -1) + 1;
   await prisma.milestone.create({
     data: {
       name: data.name.trim(),
@@ -483,6 +493,8 @@ export async function createMilestone(data: {
       date: new Date(data.date),
       description: data.description,
       roadmapId: data.roadmapId,
+      categoryId: data.categoryId,
+      sortOrder: nextOrder,
     },
   });
   revalidatePath("/roadmap");
@@ -490,7 +502,7 @@ export async function createMilestone(data: {
 
 export async function updateMilestone(
   id: string,
-  data: { name?: string; type?: MilestoneType; date?: string; description?: string }
+  data: { name?: string; type?: MilestoneType; date?: string; description?: string; categoryId?: string }
 ) {
   await requireSession();
   await prisma.milestone.update({
@@ -500,6 +512,7 @@ export async function updateMilestone(
       ...(data.type !== undefined ? { type: data.type } : {}),
       ...(data.date !== undefined ? { date: new Date(data.date) } : {}),
       ...(data.description !== undefined ? { description: data.description } : {}),
+      ...(data.categoryId !== undefined ? { categoryId: data.categoryId } : {}),
     },
   });
   revalidatePath("/roadmap");

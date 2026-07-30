@@ -12,7 +12,7 @@ import {
   deleteMilestone,
   deleteRoadmap,
   moveCategory,
-  reorderItems,
+  reorderLane,
   renameRoadmap,
   updateCategory,
   updateItem,
@@ -29,6 +29,7 @@ type ItemT = {
   startDate: string;
   endDate: string;
   categoryId: string;
+  sortOrder: number;
 };
 type CategoryT = { id: string; name: string; color: string; items: ItemT[] };
 type MilestoneType = "RELEASE" | "LAUNCH" | "DEADLINE" | "CHECKPOINT" | "DEPRECATION";
@@ -38,8 +39,13 @@ type MilestoneT = {
   type: MilestoneType;
   date: string;
   description: string;
+  categoryId: string;
+  sortOrder: number;
 };
 type RoadmapT = { id: string; name: string; description: string; isDefault: boolean };
+type LaneEntry =
+  | { kind: "item"; sortOrder: number; entry: ItemT }
+  | { kind: "milestone"; sortOrder: number; entry: MilestoneT };
 
 const DAY = 86400000;
 
@@ -72,32 +78,52 @@ const addMonths = (t: number, m: number) => {
 };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function MilestoneGlyph({ type, c }: { type: MilestoneType; c: string }) {
+function MilestoneGlyph({ type }: { type: MilestoneType }) {
   switch (type) {
     case "RELEASE":
-      return <rect x="8.5" y="8.5" width="7" height="7" transform="rotate(45 12 12)" fill={c} />;
+      return (
+        <>
+          <path
+            d="M12 5.2c1.7 1.7 2.6 4 2.6 6.3 0 1.1-.3 2.3-.7 3.2l1 1-.7.7-.9-.9c-.3.4-.8.7-1.3 1v1.7h-1.2v-1.7c-.5-.3-1-.6-1.3-1l-.9.9-.7-.7 1-1c-.4-.9-.7-2.1-.7-3.2 0-2.3.9-4.6 2.6-6.3l.6-.6.6.6Z"
+            fill="#fff"
+          />
+          <circle cx="12" cy="10.8" r="1.25" fill="currentColor" />
+        </>
+      );
     case "LAUNCH":
       return (
         <>
-          <path d="M9 5.5v13" stroke={c} strokeWidth="1.4" strokeLinecap="round" />
-          <path d="M9 6.5h7l-2.3 3L16 12.5H9z" fill={c} />
+          <path d="M9.6 17V7h.9l4.6 2.1-4.6 2.1" fill="none" stroke="#fff" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round" />
+          <path d="M9.9 7.2v9.8" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" />
         </>
       );
     case "DEADLINE":
-      return <rect x="7.5" y="7.5" width="9" height="9" rx="1" fill={c} />;
+      return (
+        <>
+          <path d="M12 7v5.4" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
+          <circle cx="12" cy="15.8" r="1" fill="#fff" />
+        </>
+      );
     case "CHECKPOINT":
-      return <circle cx="12" cy="12" r="4.5" fill={c} />;
+      return (
+        <path d="M8.4 12.3l2.4 2.4 4.8-5.4" fill="none" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      );
     case "DEPRECATION":
-      return <path d="M8 8l8 8M16 8l-8 8" stroke={c} strokeWidth="2" strokeLinecap="round" />;
+      return (
+        <>
+          <circle cx="12" cy="12" r="5.4" fill="none" stroke="#fff" strokeWidth="1.5" />
+          <path d="M8.2 15.8 15.8 8.2" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" />
+        </>
+      );
   }
 }
 
 function MilestoneIcon({ type, size = 16 }: { type: MilestoneType; size?: number }) {
   const c = MILESTONE_META[type].color;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
-      <circle cx="12" cy="12" r="11" fill={c} fillOpacity="0.12" />
-      <MilestoneGlyph type={type} c={c} />
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden style={{ filter: `drop-shadow(0 1px 2px ${c}66)`, color: c }}>
+      <circle cx="12" cy="12" r="11" fill={c} />
+      <MilestoneGlyph type={type} />
     </svg>
   );
 }
@@ -122,7 +148,15 @@ type DragState =
       origEnd: number;
       moved: boolean;
     }
-  | { kind: "item-reorder"; id: string; categoryId: string; startY: number; origIndex: number; moved: boolean };
+  | {
+      kind: "lane-reorder";
+      entryKind: "item" | "milestone";
+      id: string;
+      categoryId: string;
+      startY: number;
+      origIndex: number;
+      moved: boolean;
+    };
 
 export default function RoadmapBoard({
   roadmaps,
@@ -147,6 +181,18 @@ export default function RoadmapBoard({
   const [hiddenTypes, setHiddenTypes] = useState<Set<MilestoneType>>(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [reorderDrag, setReorderDrag] = useState<{ id: string; deltaY: number } | null>(null);
+
+  // Items and milestones share one vertical stack per lane, ordered by a
+  // single interleaved sortOrder sequence (kept consistent by reorderLane
+  // always rewriting both together).
+  const laneEntries = (categoryId: string): LaneEntry[] => {
+    const category = categories.find((c) => c.id === categoryId);
+    const items: LaneEntry[] = (category?.items ?? []).map((i) => ({ kind: "item", sortOrder: i.sortOrder, entry: i }));
+    const ms: LaneEntry[] = milestones
+      .filter((m) => m.categoryId === categoryId)
+      .map((m) => ({ kind: "milestone", sortOrder: m.sortOrder, entry: m }));
+    return [...items, ...ms].sort((a, b) => a.sortOrder - b.sortOrder);
+  };
 
   const toggleCategory = (id: string) =>
     setHiddenCategories((prev) => {
@@ -312,10 +358,16 @@ export default function RoadmapBoard({
     setIsDragging(true);
   };
 
-  const beginReorder = (e: React.PointerEvent, id: string, categoryId: string, index: number) => {
+  const beginReorder = (
+    e: React.PointerEvent,
+    entryKind: "item" | "milestone",
+    id: string,
+    categoryId: string,
+    index: number
+  ) => {
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: "item-reorder", id, categoryId, startY: e.clientY, origIndex: index, moved: false };
+    drag.current = { kind: "lane-reorder", entryKind, id, categoryId, startY: e.clientY, origIndex: index, moved: false };
     setIsDragging(true);
   };
 
@@ -349,7 +401,7 @@ export default function RoadmapBoard({
       setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart, end: newEnd } }));
       return;
     }
-    if (d.kind === "item-reorder") {
+    if (d.kind === "lane-reorder") {
       const deltaY = e.clientY - d.startY;
       if (Math.abs(deltaY) > 2) d.moved = true;
       setReorderDrag({ id: d.id, deltaY });
@@ -419,25 +471,29 @@ export default function RoadmapBoard({
       return;
     }
 
-    if (d.kind === "item-reorder") {
+    if (d.kind === "lane-reorder") {
       setReorderDrag(null);
       if (!d.moved) {
-        setPanel({ kind: "item", id: d.id });
+        setPanel({ kind: d.entryKind, id: d.id });
         return;
       }
-      const category = categories.find((c) => c.id === d.categoryId);
-      if (!category) return;
+      const merged = laneEntries(d.categoryId);
       const deltaY = e.clientY - d.startY;
       const rawIndex = d.origIndex + Math.round(deltaY / 38);
-      const clamped = Math.max(0, Math.min(category.items.length - 1, rawIndex));
+      const clamped = Math.max(0, Math.min(merged.length - 1, rawIndex));
       if (clamped !== d.origIndex) {
-        const reordered = [...category.items];
+        const reordered = [...merged];
         const [moved] = reordered.splice(d.origIndex, 1);
         reordered.splice(clamped, 0, moved);
         // No local optimistic order state to revert here (the transient
         // drag offset above is already cleared) — the list simply stays in
         // its last-known-good order if this fails, matching current data.
-        startTransition(() => reorderItems(d.categoryId, reordered.map((i) => i.id)).catch(() => {}));
+        startTransition(() =>
+          reorderLane(
+            d.categoryId,
+            reordered.map((e2) => ({ id: e2.entry.id, kind: e2.kind }))
+          ).catch(() => {})
+        );
       }
     }
   };
@@ -487,7 +543,11 @@ export default function RoadmapBoard({
         <button className="btn-ghost" onClick={() => setPanel({ kind: "lanes" })}>
           Manage lanes
         </button>
-        <button className="btn-ghost" onClick={() => setPanel({ kind: "new-milestone" })}>
+        <button
+          className="btn-ghost"
+          onClick={() => setPanel({ kind: "new-milestone" })}
+          disabled={categories.length === 0}
+        >
           Add milestone
         </button>
         <button
@@ -529,95 +589,89 @@ export default function RoadmapBoard({
                   title="Now / Later boundary"
                 />
               )}
-            </div>
-          </div>
-
-          {/* Milestone lane */}
-          <div className="flex border-b border-border bg-warning/5">
-            <div className="sticky left-0 z-10 flex w-44 shrink-0 items-center border-r border-border bg-surface px-4 py-3">
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">
-                Milestones
-              </span>
-            </div>
-            <div className="relative h-12" style={{ width }}>
-              <GridLines segments={headerSegments} x={x} />
-              <TodayLine x={x(today)} />
               <span
                 className="on-accent figure absolute -top-1 z-20 -translate-x-1/2 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-semibold"
                 style={{ left: x(today) }}
               >
                 Today
               </span>
-              {milestones.map((m) => (
-                <MilestoneMarker
-                  key={m.id}
-                  milestone={m}
-                  date={msDate(m)}
-                  x={x}
-                  hidden={hiddenTypes.has(m.type)}
-                  isDragging={isDragging}
-                  onBeginDrag={beginMilestoneDrag}
-                  onDragMove={onDragMove}
-                  onEndDrag={endDrag}
-                />
-              ))}
             </div>
           </div>
 
-          {/* Category swimlanes */}
-          {categories.map((c, laneIdx) => (
-            <div
-              key={c.id}
-              className={`flex border-b border-border/70 ${
-                laneIdx < categories.length - 1 ? "mb-3" : ""
-              }`}
-            >
-              <button
-                onClick={() => toggleCategory(c.id)}
-                title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
-                className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border px-4 text-left hover:brightness-110 ${
-                  hiddenCategories.has(c.id) ? "opacity-50" : ""
-                }`}
-                style={{ minHeight: Math.max(56, c.items.length * 38 + 22), background: c.color }}
-              >
-                <span
-                  className={`truncate text-sm font-medium text-white ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
-                >
-                  {c.name}
-                </span>
-              </button>
+          {/* Category swimlanes — items and milestones share one stack */}
+          {categories.map((c, laneIdx) => {
+            const merged = laneEntries(c.id);
+            return (
               <div
-                className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
-                style={{ width, minHeight: Math.max(56, c.items.length * 38 + 22) }}
+                key={c.id}
+                className={`flex border-b border-border/70 ${
+                  laneIdx < categories.length - 1 ? "mb-3" : ""
+                }`}
               >
-                <GridLines segments={headerSegments} x={x} />
-                {zoomBand === "mixed" && (
-                  <div
-                    className="absolute inset-y-0 border-l-2 border-dashed border-warning/60"
-                    style={{ left: x(seam) }}
-                  />
-                )}
-                <TodayLine x={x(today)} />
-                {c.items.map((i, idx) => (
-                  <ItemBar
-                    key={i.id}
-                    item={i}
-                    idx={idx}
-                    color={c.color}
-                    d={itemDates(i)}
-                    x={x}
-                    isDragging={isDragging}
-                    dragY={reorderDrag?.id === i.id ? reorderDrag.deltaY : 0}
-                    onBeginMove={beginItemMove}
-                    onBeginResize={beginItemResize}
-                    onBeginReorder={beginReorder}
-                    onDragMove={onDragMove}
-                    onEndDrag={endDrag}
-                  />
-                ))}
+                <button
+                  onClick={() => toggleCategory(c.id)}
+                  title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
+                  className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border px-4 text-left hover:brightness-110 ${
+                    hiddenCategories.has(c.id) ? "opacity-50" : ""
+                  }`}
+                  style={{ minHeight: Math.max(56, merged.length * 38 + 22), background: c.color }}
+                >
+                  <span
+                    className={`truncate text-sm font-medium text-white ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
+                  >
+                    {c.name}
+                  </span>
+                </button>
+                <div
+                  className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
+                  style={{ width, minHeight: Math.max(56, merged.length * 38 + 22) }}
+                >
+                  <GridLines segments={headerSegments} x={x} />
+                  {zoomBand === "mixed" && (
+                    <div
+                      className="absolute inset-y-0 border-l-2 border-dashed border-warning/60"
+                      style={{ left: x(seam) }}
+                    />
+                  )}
+                  <TodayLine x={x(today)} />
+                  {merged.map((entry, idx) =>
+                    entry.kind === "item" ? (
+                      <ItemBar
+                        key={entry.entry.id}
+                        item={entry.entry}
+                        idx={idx}
+                        color={c.color}
+                        d={itemDates(entry.entry)}
+                        x={x}
+                        isDragging={isDragging}
+                        dragY={reorderDrag?.id === entry.entry.id ? reorderDrag.deltaY : 0}
+                        onBeginMove={beginItemMove}
+                        onBeginResize={beginItemResize}
+                        onBeginReorder={(e, id, categoryId, index) => beginReorder(e, "item", id, categoryId, index)}
+                        onDragMove={onDragMove}
+                        onEndDrag={endDrag}
+                      />
+                    ) : (
+                      <MilestoneMarker
+                        key={entry.entry.id}
+                        milestone={entry.entry}
+                        idx={idx}
+                        date={msDate(entry.entry)}
+                        x={x}
+                        hidden={hiddenTypes.has(entry.entry.type)}
+                        isDragging={isDragging}
+                        dragY={reorderDrag?.id === entry.entry.id ? reorderDrag.deltaY : 0}
+                        onBeginDrag={beginMilestoneDrag}
+                        onBeginReorder={(e, id, categoryId, index) => beginReorder(e, "milestone", id, categoryId, index)}
+                        onDragMove={onDragMove}
+                        onEndDrag={endDrag}
+                      />
+                    )
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {categories.length === 0 && (
             <div className="p-10 text-center text-sm text-text-muted">
@@ -659,12 +713,12 @@ export default function RoadmapBoard({
       )}
       {panel?.kind === "new-milestone" && (
         <PanelFrame title="Add milestone" onClose={() => setPanel(null)}>
-          <MilestoneForm roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
+          <MilestoneForm categories={categories} roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
         </PanelFrame>
       )}
       {selectedMs && (
         <PanelFrame key={selectedMs.id} title="Milestone" onClose={() => setPanel(null)}>
-          <MilestoneForm milestone={selectedMs} roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
+          <MilestoneForm categories={categories} milestone={selectedMs} roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
         </PanelFrame>
       )}
     </div>
@@ -751,38 +805,54 @@ function ItemBar({
 
 function MilestoneMarker({
   milestone,
+  idx,
   date,
   x,
   hidden,
   isDragging,
+  dragY,
   onBeginDrag,
+  onBeginReorder,
   onDragMove,
   onEndDrag,
 }: {
   milestone: MilestoneT;
+  idx: number;
   date: number;
   x: (t: number) => number;
   hidden: boolean;
   isDragging: boolean;
+  dragY: number;
   onBeginDrag: (e: React.PointerEvent, id: string, origDate: number) => void;
+  onBeginReorder: (e: React.PointerEvent, id: string, categoryId: string, index: number) => void;
   onDragMove: (e: React.PointerEvent) => void;
   onEndDrag: (e: React.PointerEvent) => void;
 }) {
   const hover = useHoverCard(isDragging);
   return (
-    <button
-      className={`focus-ring absolute top-1/2 z-10 flex -translate-y-1/2 cursor-grab touch-none items-center gap-1 rounded-md px-1 py-0.5 hover:bg-surface active:cursor-grabbing ${
-        hidden ? "pointer-events-none opacity-20" : ""
-      }`}
-      style={{ left: x(date) - 7 }}
-      onPointerDown={(e) => onBeginDrag(e, milestone.id, date)}
-      onPointerMove={onDragMove}
-      onPointerUp={onEndDrag}
+    <div
+      className={`group absolute z-10 ${hidden ? "pointer-events-none opacity-20" : ""}`}
+      style={{ left: x(date) - 14, top: 12 + idx * 38 + dragY }}
       onMouseEnter={hover.onMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
-      <MilestoneIcon type={milestone.type} />
-      <span className="max-w-40 truncate text-[11px] font-medium">{milestone.name}</span>
+      <div
+        className="absolute left-0 top-0 flex h-7 w-3.5 cursor-grab touch-none items-center justify-center text-text-muted opacity-0 group-hover:opacity-60 active:cursor-grabbing"
+        onPointerDown={(e) => onBeginReorder(e, milestone.id, milestone.categoryId, idx)}
+        onPointerMove={onDragMove}
+        onPointerUp={onEndDrag}
+      >
+        ⠿
+      </div>
+      <button
+        className="focus-ring absolute left-3.5 top-0 flex h-7 cursor-grab touch-none items-center gap-1 whitespace-nowrap rounded-full px-1.5 hover:bg-surface active:cursor-grabbing"
+        onPointerDown={(e) => onBeginDrag(e, milestone.id, date)}
+        onPointerMove={onDragMove}
+        onPointerUp={onEndDrag}
+      >
+        <MilestoneIcon type={milestone.type} />
+        <span className="max-w-40 truncate text-[11px] font-medium">{milestone.name}</span>
+      </button>
       {hover.visible && (
         <HoverCardContent
           title={`${MILESTONE_META[milestone.type].label}: ${milestone.name}`}
@@ -790,7 +860,7 @@ function MilestoneMarker({
           description={milestone.description}
         />
       )}
-    </button>
+    </div>
   );
 }
 
@@ -936,15 +1006,18 @@ function ItemForm({
 }
 
 function MilestoneForm({
+  categories,
   milestone,
   roadmapId,
   onDone,
 }: {
+  categories: CategoryT[];
   milestone?: MilestoneT;
   roadmapId: string;
   onDone: () => void;
 }) {
   const [form, setForm] = useState({
+    categoryId: milestone?.categoryId ?? categories[0]?.id ?? "",
     name: milestone?.name ?? "",
     type: milestone?.type ?? ("RELEASE" as MilestoneType),
     date: milestone?.date ?? new Date().toISOString().slice(0, 10),
@@ -973,6 +1046,20 @@ function MilestoneForm({
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Name</label>
         <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
+      <div>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Lane</label>
+        <select
+          className="field"
+          value={form.categoryId}
+          onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+        >
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Type</label>
@@ -999,7 +1086,7 @@ function MilestoneForm({
         </div>
       </div>
       <div className="flex items-center gap-2 rounded-lg bg-bg px-3 py-2 text-xs text-text-muted">
-        <MilestoneIcon type={form.type} /> Shown on the milestone lane as this marker.
+        <MilestoneIcon type={form.type} /> Shown as this marker in its lane.
       </div>
       <div>
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Description</label>
@@ -1010,7 +1097,7 @@ function MilestoneForm({
         />
       </div>
       <div className="flex gap-2">
-        <button className="btn-primary" onClick={save} disabled={pending || !form.name.trim()}>
+        <button className="btn-primary" onClick={save} disabled={pending || !form.name.trim() || !form.categoryId}>
           {pending ? "Saving..." : milestone ? "Save changes" : "Add milestone"}
         </button>
         {milestone && (

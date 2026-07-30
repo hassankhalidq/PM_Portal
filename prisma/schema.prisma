@@ -162,6 +162,7 @@ model Category {
   color      String        @default("#0E7A5F")
   sortOrder  Int           @default(0)
   items      RoadmapItem[]
+  milestones Milestone[]
   roadmap    Roadmap?      @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
   roadmapId  String?
 
@@ -189,9 +190,13 @@ model Milestone {
   type        MilestoneType @default(RELEASE)
   date        DateTime
   description String        @default("")
+  sortOrder   Int           @default(0)
   createdAt   DateTime      @default(now())
   roadmap     Roadmap?      @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
   roadmapId   String?
+  category    Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId  String
 
   @@index([roadmapId])
+  @@index([categoryId])
 }
