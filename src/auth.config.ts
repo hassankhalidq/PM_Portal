@@ -3,7 +3,11 @@ import type { NextAuthConfig } from "next-auth";
 // Edge-safe base config (no database imports) shared with middleware.
 export const authConfig = {
   pages: { signIn: "/login" },
-  session: { strategy: "jwt" },
+  // Rolling session: 4 hours of inactivity signs you out. Active use keeps
+  // renewing it (checked every 30 min, well under the 4h ceiling) so you're
+  // not interrupted mid-work — without an explicit maxAge, NextAuth's
+  // default is 30 days, which is why sessions never seemed to expire.
+  session: { strategy: "jwt", maxAge: 60 * 60 * 4, updateAge: 60 * 30 },
   providers: [],
   callbacks: {
     authorized({ auth, request }) {
