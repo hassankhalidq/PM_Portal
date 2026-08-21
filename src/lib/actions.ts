@@ -246,6 +246,92 @@ export async function deleteLogEntry(id: string) {
   revalidatePath("/projects");
 }
 
+// ---------- Weekly status ----------
+type BlockerTeamInput = { team: string; days: number };
+type BlockerDetailInput = { detail: string; team: string };
+
+function sanitizeBlockerTeams(teams: BlockerTeamInput[]) {
+  return teams
+    .map((t) => ({ team: (t.team ?? "").trim(), days: Math.max(0, Math.round(Number(t.days) || 0)) }))
+    .filter((t) => t.team.length > 0);
+}
+function sanitizeBlockerDetails(details: BlockerDetailInput[]) {
+  return details
+    .map((d) => ({ detail: (d.detail ?? "").trim(), team: (d.team ?? "").trim() }))
+    .filter((d) => d.detail.length > 0);
+}
+
+export async function createWeeklyStatus(
+  boardId: string,
+  data: {
+    weekStart: string;
+    weekEnd: string;
+    label?: string;
+    summary?: string;
+    issuesFound?: number;
+    issuesResolved?: number;
+    blockerTeams?: BlockerTeamInput[];
+    blockerDetails?: BlockerDetailInput[];
+  }
+) {
+  await requireSession();
+  if (!data.weekStart || !data.weekEnd) throw new Error("Week start and end are required.");
+  if (new Date(data.weekEnd) < new Date(data.weekStart)) throw new Error("Week end must be on or after week start.");
+  await prisma.weeklyStatus.create({
+    data: {
+      boardId,
+      weekStart: new Date(data.weekStart),
+      weekEnd: new Date(data.weekEnd),
+      label: (data.label ?? "").trim(),
+      summary: (data.summary ?? "").trim(),
+      issuesFound: Math.max(0, Math.round(data.issuesFound ?? 0)),
+      issuesResolved: Math.max(0, Math.round(data.issuesResolved ?? 0)),
+      blockerTeams: sanitizeBlockerTeams(data.blockerTeams ?? []),
+      blockerDetails: sanitizeBlockerDetails(data.blockerDetails ?? []),
+    },
+  });
+  revalidatePath("/projects");
+}
+
+export async function updateWeeklyStatus(
+  id: string,
+  data: Partial<{
+    weekStart: string;
+    weekEnd: string;
+    label: string;
+    summary: string;
+    issuesFound: number;
+    issuesResolved: number;
+    blockerTeams: BlockerTeamInput[];
+    blockerDetails: BlockerDetailInput[];
+  }>
+) {
+  await requireSession();
+  if (data.weekStart !== undefined && data.weekEnd !== undefined && new Date(data.weekEnd) < new Date(data.weekStart)) {
+    throw new Error("Week end must be on or after week start.");
+  }
+  await prisma.weeklyStatus.update({
+    where: { id },
+    data: {
+      ...(data.weekStart !== undefined ? { weekStart: new Date(data.weekStart) } : {}),
+      ...(data.weekEnd !== undefined ? { weekEnd: new Date(data.weekEnd) } : {}),
+      ...(data.label !== undefined ? { label: data.label.trim() } : {}),
+      ...(data.summary !== undefined ? { summary: data.summary.trim() } : {}),
+      ...(data.issuesFound !== undefined ? { issuesFound: Math.max(0, Math.round(data.issuesFound)) } : {}),
+      ...(data.issuesResolved !== undefined ? { issuesResolved: Math.max(0, Math.round(data.issuesResolved)) } : {}),
+      ...(data.blockerTeams !== undefined ? { blockerTeams: sanitizeBlockerTeams(data.blockerTeams) } : {}),
+      ...(data.blockerDetails !== undefined ? { blockerDetails: sanitizeBlockerDetails(data.blockerDetails) } : {}),
+    },
+  });
+  revalidatePath("/projects");
+}
+
+export async function deleteWeeklyStatus(id: string) {
+  await requireSession();
+  await prisma.weeklyStatus.delete({ where: { id } });
+  revalidatePath("/projects");
+}
+
 // ---------- Item dependencies ----------
 export async function addDependency(predecessorId: string, successorId: string) {
   await requireSession();

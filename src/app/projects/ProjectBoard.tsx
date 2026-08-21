@@ -7,15 +7,18 @@ import {
   createBoard,
   createLogEntry,
   createNode,
+  createWeeklyStatus,
   deleteAttachment,
   deleteBoard,
   deleteLogEntry,
   deleteNode,
+  deleteWeeklyStatus,
   removeDependency,
   renameBoard,
   reorderProjectGroups,
   updateLogEntry,
   updateNode,
+  updateWeeklyStatus,
   uploadAttachment,
 } from "@/lib/actions";
 import EntitySwitcher from "@/components/EntitySwitcher";
@@ -36,6 +39,17 @@ export type LogEntryT = {
   nodeParentId: string | null;
 };
 export type DependencyT = { id: string; predecessorId: string; successorId: string };
+export type WeeklyStatusT = {
+  id: string;
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+  summary: string;
+  issuesFound: number;
+  issuesResolved: number;
+  blockerTeams: { team: string; days: number }[];
+  blockerDetails: { detail: string; team: string }[];
+};
 
 export type NodeT = {
   id: string;
@@ -225,14 +239,16 @@ export default function ProjectBoard({
   currentBoardId,
   logEntries,
   dependencies,
+  weeklyStatuses,
 }: {
   nodes: NodeT[];
   boards: BoardT[];
   currentBoardId: string;
   logEntries: LogEntryT[];
   dependencies: DependencyT[];
+  weeklyStatuses: WeeklyStatusT[];
 }) {
-  const [view, setView] = useState<"table" | "kanban" | "timeline" | "log">("table");
+  const [view, setView] = useState<"table" | "kanban" | "timeline" | "log" | "weekly">("table");
   const [filters, setFilters] = useState({ owner: "", status: "", priority: "" });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -477,6 +493,14 @@ export default function ProjectBoard({
           >
             Log
           </button>
+          <button
+            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              view === "weekly" ? "bg-accent/10 text-accent" : "text-text-muted"
+            }`}
+            onClick={() => setView("weekly")}
+          >
+            Weekly
+          </button>
         </div>
         <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
           New project
@@ -603,8 +627,10 @@ export default function ProjectBoard({
           pxPerDay={timelinePxPerDay}
           onSelect={setSelectedId}
         />
-      ) : (
+      ) : view === "log" ? (
         <LogView nodes={nodes} logEntries={logEntries} />
+      ) : (
+        <WeeklyStatusView boardId={currentBoardId} weeklyStatuses={weeklyStatuses} />
       )}
 
       {selected && (
@@ -2307,6 +2333,454 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
             )
           )
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Weekly status ----------
+type WeeklyFormState = {
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+  summary: string;
+  issuesFound: number;
+  issuesResolved: number;
+  blockerTeams: { team: string; days: number }[];
+  blockerDetails: { detail: string; team: string }[];
+};
+
+const EMPTY_WEEKLY_FORM: WeeklyFormState = {
+  weekStart: "",
+  weekEnd: "",
+  label: "",
+  summary: "",
+  issuesFound: 0,
+  issuesResolved: 0,
+  blockerTeams: [],
+  blockerDetails: [],
+};
+
+function fmtWeeklyRange(start: string, end: string) {
+  const s = new Date(start + "T00:00:00").toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+  const e = new Date(end + "T00:00:00").toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  return `${s} – ${e}`;
+}
+
+function WeeklyStatusView({ boardId, weeklyStatuses }: { boardId: string; weeklyStatuses: WeeklyStatusT[] }) {
+  const [, start] = useTransition();
+  const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<WeeklyFormState>(EMPTY_WEEKLY_FORM);
+
+  const beginCreate = () => {
+    setError("");
+    const latest = weeklyStatuses[0];
+    let weekStart: string;
+    if (latest) {
+      const d = new Date(latest.weekEnd + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() + 1);
+      weekStart = d.toISOString().slice(0, 10);
+    } else {
+      weekStart = new Date().toISOString().slice(0, 10);
+    }
+    const endD = new Date(weekStart + "T00:00:00Z");
+    endD.setUTCDate(endD.getUTCDate() + 6);
+    setForm({ ...EMPTY_WEEKLY_FORM, weekStart, weekEnd: endD.toISOString().slice(0, 10) });
+    setEditingId(null);
+    setCreating(true);
+  };
+
+  const beginEdit = (w: WeeklyStatusT) => {
+    setError("");
+    setForm({
+      weekStart: w.weekStart,
+      weekEnd: w.weekEnd,
+      label: w.label,
+      summary: w.summary,
+      issuesFound: w.issuesFound,
+      issuesResolved: w.issuesResolved,
+      blockerTeams: w.blockerTeams.map((t) => ({ ...t })),
+      blockerDetails: w.blockerDetails.map((d) => ({ ...d })),
+    });
+    setCreating(false);
+    setEditingId(w.id);
+  };
+
+  const cancel = () => {
+    setCreating(false);
+    setEditingId(null);
+    setError("");
+  };
+
+  const addTeam = () => setForm((f) => ({ ...f, blockerTeams: [...f.blockerTeams, { team: "", days: 0 }] }));
+  const updateTeam = (idx: number, patch: Partial<{ team: string; days: number }>) =>
+    setForm((f) => ({ ...f, blockerTeams: f.blockerTeams.map((t, i) => (i === idx ? { ...t, ...patch } : t)) }));
+  const removeTeam = (idx: number) =>
+    setForm((f) => ({ ...f, blockerTeams: f.blockerTeams.filter((_, i) => i !== idx) }));
+
+  const addDetail = () => setForm((f) => ({ ...f, blockerDetails: [...f.blockerDetails, { detail: "", team: "" }] }));
+  const updateDetail = (idx: number, patch: Partial<{ detail: string; team: string }>) =>
+    setForm((f) => ({ ...f, blockerDetails: f.blockerDetails.map((d, i) => (i === idx ? { ...d, ...patch } : d)) }));
+  const removeDetail = (idx: number) =>
+    setForm((f) => ({ ...f, blockerDetails: f.blockerDetails.filter((_, i) => i !== idx) }));
+
+  const submit = () => {
+    if (!form.weekStart || !form.weekEnd) {
+      setError("Week start and end are required.");
+      return;
+    }
+    if (form.weekEnd < form.weekStart) {
+      setError("Week end must be on or after week start.");
+      return;
+    }
+    setError("");
+    start(async () => {
+      try {
+        if (creating) {
+          await createWeeklyStatus(boardId, form);
+          setCreating(false);
+        } else if (editingId) {
+          await updateWeeklyStatus(editingId, form);
+          setEditingId(null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save weekly status.");
+      }
+    });
+  };
+
+  const remove = (id: string) => {
+    if (!confirm("Delete this week's status?")) return;
+    start(() => deleteWeeklyStatus(id));
+  };
+
+  return (
+    <div className="flex-1 overflow-auto px-6 py-5">
+      <div className="mb-4 flex items-center justify-between" style={{ maxWidth: 720 }}>
+        <p className="text-xs text-text-muted">
+          {weeklyStatuses.length} week{weeklyStatuses.length === 1 ? "" : "s"} tracked
+        </p>
+        <button className="btn-primary" onClick={beginCreate}>
+          + Add week
+        </button>
+      </div>
+
+      {error && (
+        <p className="mb-3 text-sm text-danger" style={{ maxWidth: 720 }}>
+          {error}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-4" style={{ maxWidth: 720 }}>
+        {creating && (
+          <WeeklyStatusCard
+            form={form}
+            setForm={setForm}
+            addTeam={addTeam}
+            updateTeam={updateTeam}
+            removeTeam={removeTeam}
+            addDetail={addDetail}
+            updateDetail={updateDetail}
+            removeDetail={removeDetail}
+            onSave={submit}
+            onCancel={cancel}
+          />
+        )}
+
+        {weeklyStatuses.length === 0 && !creating && (
+          <p className="mt-16 text-center text-sm text-text-muted">
+            No weekly status entries yet. Click &ldquo;Add week&rdquo; to start tracking.
+          </p>
+        )}
+
+        {weeklyStatuses.map((w) =>
+          editingId === w.id ? (
+            <WeeklyStatusCard
+              key={w.id}
+              form={form}
+              setForm={setForm}
+              addTeam={addTeam}
+              updateTeam={updateTeam}
+              removeTeam={removeTeam}
+              addDetail={addDetail}
+              updateDetail={updateDetail}
+              removeDetail={removeDetail}
+              onSave={submit}
+              onCancel={cancel}
+            />
+          ) : (
+            <WeeklyStatusReadCard key={w.id} data={w} onEdit={() => beginEdit(w)} onDelete={() => remove(w.id)} />
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WeeklyStatusReadCard({
+  data,
+  onEdit,
+  onDelete,
+}: {
+  data: WeeklyStatusT;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="group overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="flex items-center justify-between bg-accent px-4 py-2">
+        <span className="on-accent text-xs font-bold uppercase tracking-wider">Weekly Status</span>
+        <button
+          aria-label="Delete week"
+          className="on-accent text-xs opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      <div className="cursor-pointer" onClick={onEdit}>
+        <div className="flex flex-wrap items-baseline gap-2 border-b border-border bg-accent/10 px-4 py-2">
+          <span className="figure text-sm font-medium">Week of: {fmtWeeklyRange(data.weekStart, data.weekEnd)}</span>
+          {data.label && <span className="text-xs text-text-muted">({data.label})</span>}
+        </div>
+
+        <div className="border-b border-border px-4 py-3">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Summary</p>
+          <p className="whitespace-pre-wrap text-sm">{data.summary || "—"}</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 border-b border-border px-4 py-3">
+          <div className="rounded-lg border border-danger/30 bg-danger/10 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-danger">Issues found</p>
+            <p className="figure text-2xl font-bold text-danger">{data.issuesFound}</p>
+          </div>
+          <div className="rounded-lg border border-success/30 bg-success/10 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-success">Issues resolved</p>
+            <p className="figure text-2xl font-bold text-success">{data.issuesResolved}</p>
+          </div>
+        </div>
+
+        <div className="border-b border-border px-4 py-3">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+            Blockers by team (days)
+          </p>
+          {data.blockerTeams.length === 0 ? (
+            <p className="text-sm text-text-muted">—</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {data.blockerTeams.map((t, i) => (
+                <span key={i} className="rounded-full border border-border bg-bg px-3 py-1.5 text-sm">
+                  {t.team} <span className="figure text-text-muted">· {t.days}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="px-4 py-3">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Blocker details</p>
+          {data.blockerDetails.length === 0 ? (
+            <p className="text-sm text-text-muted">—</p>
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-border">
+              <div className="grid grid-cols-[32px_1fr_140px] divide-x divide-border bg-bg text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                <div className="px-2 py-1.5">#</div>
+                <div className="px-2 py-1.5">Detail</div>
+                <div className="px-2 py-1.5">Team</div>
+              </div>
+              {data.blockerDetails.map((d, i) => (
+                <div key={i} className="grid grid-cols-[32px_1fr_140px] divide-x divide-border border-t border-border">
+                  <div className="figure px-2 py-1.5 text-xs text-text-muted">{i + 1}</div>
+                  <div className="px-2 py-1.5 text-sm">{d.detail}</div>
+                  <div className="px-2 py-1.5 text-sm text-text-muted">{d.team || "—"}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WeeklyStatusCard({
+  form,
+  setForm,
+  addTeam,
+  updateTeam,
+  removeTeam,
+  addDetail,
+  updateDetail,
+  removeDetail,
+  onSave,
+  onCancel,
+}: {
+  form: WeeklyFormState;
+  setForm: React.Dispatch<React.SetStateAction<WeeklyFormState>>;
+  addTeam: () => void;
+  updateTeam: (idx: number, patch: Partial<{ team: string; days: number }>) => void;
+  removeTeam: (idx: number) => void;
+  addDetail: () => void;
+  updateDetail: (idx: number, patch: Partial<{ detail: string; team: string }>) => void;
+  removeDetail: (idx: number) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-accent bg-surface shadow-sm">
+      <div className="bg-accent px-4 py-2">
+        <span className="on-accent text-xs font-bold uppercase tracking-wider">Weekly Status</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-accent/10 px-4 py-2">
+        <span className="text-xs font-medium text-text-muted">Week of:</span>
+        <input
+          type="date"
+          className="field"
+          style={{ width: 150 }}
+          value={form.weekStart}
+          onChange={(e) => setForm((f) => ({ ...f, weekStart: e.target.value }))}
+        />
+        <span className="text-xs text-text-muted">–</span>
+        <input
+          type="date"
+          className="field"
+          style={{ width: 150 }}
+          value={form.weekEnd}
+          onChange={(e) => setForm((f) => ({ ...f, weekEnd: e.target.value }))}
+        />
+        <input
+          className="field flex-1"
+          placeholder="Optional note, e.g. lead-in before Week 1"
+          value={form.label}
+          onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
+        />
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Summary</p>
+        <textarea
+          className="field min-h-[72px]"
+          value={form.summary}
+          onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 border-b border-border px-4 py-3">
+        <div className="rounded-lg border border-danger/30 bg-danger/10 p-3">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-danger">Issues found</p>
+          <input
+            type="number"
+            min={0}
+            className="field"
+            value={form.issuesFound}
+            onChange={(e) => setForm((f) => ({ ...f, issuesFound: Number(e.target.value) }))}
+          />
+        </div>
+        <div className="rounded-lg border border-success/30 bg-success/10 p-3">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-success">Issues resolved</p>
+          <input
+            type="number"
+            min={0}
+            className="field"
+            value={form.issuesResolved}
+            onChange={(e) => setForm((f) => ({ ...f, issuesResolved: Number(e.target.value) }))}
+          />
+        </div>
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+          Blockers by team (days)
+        </p>
+        <div className="flex flex-col gap-1.5">
+          {form.blockerTeams.map((t, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <div className="flex-1">
+                <input
+                  className="field"
+                  placeholder="Team name"
+                  value={t.team}
+                  onChange={(e) => updateTeam(i, { team: e.target.value })}
+                />
+              </div>
+              <div style={{ width: 80 }}>
+                <input
+                  type="number"
+                  min={0}
+                  className="field"
+                  value={t.days}
+                  onChange={(e) => updateTeam(i, { days: Number(e.target.value) })}
+                />
+              </div>
+              <button aria-label="Remove team" className="text-text-muted hover:text-danger" onClick={() => removeTeam(i)}>
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <button className="btn-ghost mt-2 px-2.5 py-1 text-xs" onClick={addTeam}>
+          + Add team
+        </button>
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Blocker details</p>
+        <div className="flex flex-col gap-1.5">
+          {form.blockerDetails.map((d, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <div className="flex-1">
+                <input
+                  className="field"
+                  placeholder="Detail"
+                  value={d.detail}
+                  onChange={(e) => updateDetail(i, { detail: e.target.value })}
+                />
+              </div>
+              <div style={{ width: 144 }}>
+                <input
+                  className="field"
+                  placeholder="Team"
+                  value={d.team}
+                  onChange={(e) => updateDetail(i, { team: e.target.value })}
+                />
+              </div>
+              <button
+                aria-label="Remove detail"
+                className="text-text-muted hover:text-danger"
+                onClick={() => removeDetail(i)}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <button className="btn-ghost mt-2 px-2.5 py-1 text-xs" onClick={addDetail}>
+          + Add detail row
+        </button>
+      </div>
+
+      <div className="flex justify-end gap-2 px-4 py-3">
+        <button className="btn-ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn-primary" onClick={onSave}>
+          Save
+        </button>
       </div>
     </div>
   );

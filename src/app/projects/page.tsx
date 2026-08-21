@@ -34,7 +34,7 @@ export default async function ProjectsPage({
       })
     : [];
 
-  const [logEntries, dependencies] = currentBoard
+  const [logEntries, dependencies, weeklyStatuses] = currentBoard
     ? await Promise.all([
         prisma.logEntry.findMany({
           where: { node: { boardId: currentBoard.id } },
@@ -45,8 +45,12 @@ export default async function ProjectsPage({
           where: { predecessor: { boardId: currentBoard.id } },
           select: { id: true, predecessorId: true, successorId: true },
         }),
+        prisma.weeklyStatus.findMany({
+          where: { boardId: currentBoard.id },
+          orderBy: [{ weekStart: "desc" }, { createdAt: "desc" }],
+        }),
       ])
-    : [[], []];
+    : [[], [], []];
 
   const serialized = nodes.map((n) => ({
     id: n.id,
@@ -87,6 +91,18 @@ export default async function ProjectsPage({
     nodeParentId: l.node.parentId,
   }));
 
+  const serializedWeeklyStatuses = weeklyStatuses.map((w) => ({
+    id: w.id,
+    weekStart: w.weekStart.toISOString().slice(0, 10),
+    weekEnd: w.weekEnd.toISOString().slice(0, 10),
+    label: w.label,
+    summary: w.summary,
+    issuesFound: w.issuesFound,
+    issuesResolved: w.issuesResolved,
+    blockerTeams: w.blockerTeams as unknown as { team: string; days: number }[],
+    blockerDetails: w.blockerDetails as unknown as { detail: string; team: string }[],
+  }));
+
   return (
     <Shell active="projects" userName={session?.user?.name ?? ""} role={role}>
       <ProjectBoard
@@ -95,6 +111,7 @@ export default async function ProjectsPage({
         currentBoardId={currentBoard?.id ?? ""}
         logEntries={serializedLogEntries}
         dependencies={dependencies}
+        weeklyStatuses={serializedWeeklyStatuses}
       />
     </Shell>
   );

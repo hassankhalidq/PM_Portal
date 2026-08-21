@@ -46,12 +46,13 @@ model User {
 }
 
 model Board {
-  id          String        @id @default(cuid())
-  name        String
-  description String        @default("")
-  isDefault   Boolean       @default(false)
-  createdAt   DateTime      @default(now())
-  nodes       ProjectNode[]
+  id             String         @id @default(cuid())
+  name           String
+  description    String         @default("")
+  isDefault      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  nodes          ProjectNode[]
+  weeklyStatuses WeeklyStatus[]
 }
 
 // ---------- Board 1: Project Board (recursive tree) ----------
@@ -101,6 +102,31 @@ model LogEntry {
   updatedAt DateTime    @updatedAt
 
   @@index([nodeId])
+}
+
+// A whole-project, per-week snapshot card (issues, blockers, freeform
+// summary). Scoped directly to Board (unlike LogEntry, which is scoped to
+// ProjectNode) because nothing here is about a single item — it's a
+// board-wide rollup. blockerTeams/blockerDetails are Json arrays because
+// the UI edits the whole card (including adding/removing team tiles and
+// detail rows) as one atomic Save, never as independent row CRUD.
+model WeeklyStatus {
+  id             String   @id @default(cuid())
+  board          Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  boardId        String
+  weekStart      DateTime
+  weekEnd        DateTime
+  label          String   @default("")
+  summary        String   @default("")
+  issuesFound    Int      @default(0)
+  issuesResolved Int      @default(0)
+  blockerTeams   Json     @default("[]")
+  blockerDetails Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([boardId])
+  @@index([boardId, weekStart])
 }
 
 // Real item-to-item dependency (predecessor must finish before successor
