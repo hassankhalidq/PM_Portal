@@ -1955,6 +1955,50 @@ function nodeAncestorPath(nodeId: string, nodes: NodeT[]): string {
 
 const LOG_GRID = "112px 190px minmax(220px,1.4fr) 120px 140px 140px minmax(180px,1.4fr) 40px";
 
+function mondayOfWeek(dateStr: string) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const day = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() + ((day === 0 ? -6 : 1) - day));
+  return d;
+}
+function fmtWeekRange(monday: Date) {
+  const sunday = new Date(monday);
+  sunday.setUTCDate(sunday.getUTCDate() + 6);
+  const start = monday.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  const end = sunday.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  return `${start} – ${end}`;
+}
+
+type LogRow =
+  | { kind: "separator"; key: string; weekLabel: string; monthLabel: string | null }
+  | { kind: "entry"; entry: LogEntryT };
+
+function groupLogRows(entries: LogEntryT[]): LogRow[] {
+  const out: LogRow[] = [];
+  let lastWeekKey = "";
+  let lastMonthKey = "";
+  for (const entry of entries) {
+    const monday = mondayOfWeek(entry.date);
+    const weekKey = monday.toISOString().slice(0, 10);
+    if (weekKey !== lastWeekKey) {
+      const monthKey = `${monday.getUTCFullYear()}-${monday.getUTCMonth()}`;
+      const isNewMonth = monthKey !== lastMonthKey;
+      out.push({
+        kind: "separator",
+        key: weekKey,
+        weekLabel: fmtWeekRange(monday),
+        monthLabel: isNewMonth
+          ? monday.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
+          : null,
+      });
+      lastWeekKey = weekKey;
+      lastMonthKey = monthKey;
+    }
+    out.push({ kind: "entry", entry });
+  }
+  return out;
+}
+
 type LogFormState = {
   date: string;
   nodeId: string;
@@ -1983,6 +2027,7 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
   }, [logEntries]);
 
   const filtered = filterNodeId ? logEntries.filter((l) => l.nodeId === filterNodeId) : logEntries;
+  const rows = useMemo(() => groupLogRows(filtered), [filtered]);
 
   const submitAdd = () => {
     if (!addForm.nodeId || !addForm.activity.trim()) {
@@ -2146,12 +2191,25 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
             No log entries yet.
           </div>
         ) : (
-          filtered.map((entry, idx) =>
-            editingId === entry.id ? (
+          rows.map((row, idx) =>
+            row.kind === "separator" ? (
               <div
-                key={entry.id}
+                key={`sep-${row.key}`}
+                className={`flex items-center gap-2 border-x border-b border-border px-3 py-1.5 ${
+                  row.monthLabel ? "bg-accent/10" : "bg-bg"
+                }`}
+              >
+                {row.monthLabel && (
+                  <span className="text-xs font-bold uppercase tracking-wider text-accent">{row.monthLabel}</span>
+                )}
+                <span className="figure text-[11px] font-medium text-text-muted">Week of {row.weekLabel}</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            ) : editingId === row.entry.id ? (
+              <div
+                key={row.entry.id}
                 className={`grid items-center gap-2 border-x border-b border-border bg-accent/5 p-2 ${
-                  idx === filtered.length - 1 ? "rounded-b-lg" : ""
+                  idx === rows.length - 1 ? "rounded-b-lg" : ""
                 }`}
                 style={{ gridTemplateColumns: LOG_GRID }}
               >
@@ -2213,26 +2271,26 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
               </div>
             ) : (
               <div
-                key={entry.id}
+                key={row.entry.id}
                 className={`group grid cursor-pointer items-center border-x border-b border-border bg-surface hover:bg-bg ${
-                  idx === filtered.length - 1 ? "rounded-b-lg" : ""
+                  idx === rows.length - 1 ? "rounded-b-lg" : ""
                 }`}
                 style={{ gridTemplateColumns: LOG_GRID }}
-                onClick={() => beginEdit(entry)}
+                onClick={() => beginEdit(row.entry)}
               >
-                <div className="figure px-3 py-2 text-xs text-text-muted">{fmtDate(entry.date)}</div>
-                <div className="truncate px-3 py-2 text-sm">{nodeAncestorPath(entry.nodeId, nodes)}</div>
-                <div className="truncate px-3 py-2 text-sm">{entry.activity}</div>
-                <div className="truncate px-3 py-2 text-sm text-text-muted">{entry.owner || "—"}</div>
-                <div className="truncate px-3 py-2 text-sm text-text-muted">{entry.waitingOn || "—"}</div>
+                <div className="figure px-3 py-2 text-xs text-text-muted">{fmtDate(row.entry.date)}</div>
+                <div className="truncate px-3 py-2 text-sm">{nodeAncestorPath(row.entry.nodeId, nodes)}</div>
+                <div className="truncate px-3 py-2 text-sm">{row.entry.activity}</div>
+                <div className="truncate px-3 py-2 text-sm text-text-muted">{row.entry.owner || "—"}</div>
+                <div className="truncate px-3 py-2 text-sm text-text-muted">{row.entry.waitingOn || "—"}</div>
                 <div className="px-3 py-2">
-                  {entry.status ? (
-                    <span className={`badge ${logStatusBadgeClass(entry.status)}`}>{entry.status}</span>
+                  {row.entry.status ? (
+                    <span className={`badge ${logStatusBadgeClass(row.entry.status)}`}>{row.entry.status}</span>
                   ) : (
                     <span className="text-sm text-text-muted">—</span>
                   )}
                 </div>
-                <div className="truncate px-3 py-2 text-sm text-text-muted">{entry.remarks || "—"}</div>
+                <div className="truncate px-3 py-2 text-sm text-text-muted">{row.entry.remarks || "—"}</div>
                 <div
                   className="flex justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100"
                   onClick={(e) => e.stopPropagation()}
@@ -2240,7 +2298,7 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
                   <button
                     aria-label="Delete entry"
                     className="text-xs text-text-muted hover:text-danger"
-                    onClick={() => remove(entry.id)}
+                    onClick={() => remove(row.entry.id)}
                   >
                     ✕
                   </button>
