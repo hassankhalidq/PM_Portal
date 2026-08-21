@@ -537,20 +537,6 @@ export async function updateItem(
   revalidatePath("/roadmap");
 }
 
-// Reorders a mixed lane of items and milestones together — both share one
-// sortOrder sequence per categoryId so they can be freely interleaved.
-export async function reorderLane(categoryId: string, entries: { id: string; kind: "item" | "milestone" }[]) {
-  await requireSession();
-  await prisma.$transaction(
-    entries.map(({ id, kind }, index) =>
-      kind === "item"
-        ? prisma.roadmapItem.update({ where: { id }, data: { sortOrder: index } })
-        : prisma.milestone.update({ where: { id }, data: { sortOrder: index } })
-    )
-  );
-  revalidatePath("/roadmap");
-}
-
 export async function deleteItem(id: string) {
   await requireSession();
   await prisma.roadmapItem.delete({ where: { id } });

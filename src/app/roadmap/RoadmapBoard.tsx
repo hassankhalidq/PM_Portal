@@ -12,7 +12,6 @@ import {
   deleteMilestone,
   deleteRoadmap,
   moveCategory,
-  reorderLane,
   renameRoadmap,
   updateCategory,
   updateItem,
@@ -78,6 +77,32 @@ const addMonths = (t: number, m: number) => {
 };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+// A milestone is a point date but renders as icon + truncated label (max-w-40
+// = 160px cap), so lane packing needs to reserve real horizontal space for
+// it. Measuring the actual text (rather than assuming the 160px worst case)
+// keeps short-named milestones from over-reserving space and defeating the
+// point of compact packing.
+let milestoneMeasureCtx: CanvasRenderingContext2D | null | undefined;
+const milestoneWidthCache = new Map<string, number>();
+function measureMilestoneWidth(name: string): number {
+  const cached = milestoneWidthCache.get(name);
+  if (cached !== undefined) return cached;
+  const FALLBACK = 200; // icon+padding+full 160px label cap; used if canvas unavailable (SSR pass)
+  if (typeof document === "undefined") return FALLBACK;
+  if (milestoneMeasureCtx === undefined) {
+    milestoneMeasureCtx = document.createElement("canvas").getContext("2d");
+  }
+  const CHROME = 36; // icon(16) + gap(4) + padding(12) + small buffer
+  let labelWidth = 160;
+  if (milestoneMeasureCtx) {
+    milestoneMeasureCtx.font = "500 11px system-ui, -apple-system, sans-serif";
+    labelWidth = Math.min(160, milestoneMeasureCtx.measureText(name).width);
+  }
+  const total = Math.ceil(labelWidth + CHROME);
+  milestoneWidthCache.set(name, total);
+  return total;
+}
+
 function MilestoneGlyph({ type }: { type: MilestoneType }) {
   switch (type) {
     case "RELEASE":
@@ -139,22 +164,14 @@ type Panel =
 type ZoomBand = "quarterly" | "mixed" | "monthly" | "daily";
 
 type DragState =
-  | { kind: "milestone"; id: string; startX: number; origDate: number; moved: boolean }
+  | { kind: "milestone"; id: string; startX: number; origDate: number; origCategoryId: string; moved: boolean }
   | {
       kind: "item-move" | "item-resize-start" | "item-resize-end";
       id: string;
       startX: number;
       origStart: number;
       origEnd: number;
-      moved: boolean;
-    }
-  | {
-      kind: "lane-reorder";
-      entryKind: "item" | "milestone";
-      id: string;
-      categoryId: string;
-      startY: number;
-      origIndex: number;
+      origCategoryId: string;
       moved: boolean;
     };
 
@@ -175,24 +192,25 @@ export default function RoadmapBoard({
   const [panel, setPanel] = useState<Panel>(null);
   // Optimistic date overrides while a drag round-trips to the server.
   const [overrides, setOverrides] = useState<Record<string, { start: number; end: number }>>({});
-  useEffect(() => setOverrides({}), [categories, milestones]);
+  // Transient "this entry is currently hovering a different lane" override
+  // while a cross-lane drag is in progress (cleared once revalidated props
+  // land, mirroring how `overrides` is cleared below).
+  const [dragCategoryOverride, setDragCategoryOverride] = useState<{ id: string; categoryId: string } | null>(null);
+  const drag = useRef<DragState | null>(null);
+  // A revalidation from an EARLIER action can land while a NEW drag is
+  // already in progress (categories/milestones props refresh mid-gesture).
+  // Only clear state for entries that aren't the one currently being
+  // dragged, so an in-flight drag's live override survives a same-time
+  // revalidation instead of being silently wiped before endDrag reads it.
+  useEffect(() => {
+    const activeId = drag.current?.id;
+    setOverrides((o) => (activeId && activeId in o ? { [activeId]: o[activeId] } : {}));
+    setDragCategoryOverride((prev) => (prev && prev.id === activeId ? prev : null));
+  }, [categories, milestones]);
 
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
   const [hiddenTypes, setHiddenTypes] = useState<Set<MilestoneType>>(new Set());
   const [isDragging, setIsDragging] = useState(false);
-  const [reorderDrag, setReorderDrag] = useState<{ id: string; deltaY: number } | null>(null);
-
-  // Items and milestones share one vertical stack per lane, ordered by a
-  // single interleaved sortOrder sequence (kept consistent by reorderLane
-  // always rewriting both together).
-  const laneEntries = (categoryId: string): LaneEntry[] => {
-    const category = categories.find((c) => c.id === categoryId);
-    const items: LaneEntry[] = (category?.items ?? []).map((i) => ({ kind: "item", sortOrder: i.sortOrder, entry: i }));
-    const ms: LaneEntry[] = milestones
-      .filter((m) => m.categoryId === categoryId)
-      .map((m) => ({ kind: "milestone", sortOrder: m.sortOrder, entry: m }));
-    return [...items, ...ms].sort((a, b) => a.sortOrder - b.sortOrder);
-  };
 
   const toggleCategory = (id: string) =>
     setHiddenCategories((prev) => {
@@ -228,6 +246,17 @@ export default function RoadmapBoard({
   // setting leaves visible dead space past the last column instead of using
   // the screen.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Lane DOM bounds, used to hit-test which lane a drag is currently
+  // hovering over (for cross-lane free drag).
+  const laneRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const findHoveredLane = (clientY: number): string | null => {
+    let hit: string | null = null;
+    laneRefs.current.forEach((el, categoryId) => {
+      const rect = el.getBoundingClientRect();
+      if (clientY >= rect.top && clientY <= rect.bottom) hit = categoryId;
+    });
+    return hit;
+  };
   const [containerWidth, setContainerWidth] = useState(0);
   useEffect(() => {
     const el = scrollRef.current;
@@ -330,18 +359,17 @@ export default function RoadmapBoard({
   }, [rangeStart, rangeEnd, seam, zoomBand]);
 
   // ---- drag handling ----
-  const drag = useRef<DragState | null>(null);
   const [, startTransition] = useTransition();
 
-  const beginMilestoneDrag = (e: React.PointerEvent, id: string, origDate: number) => {
+  const beginMilestoneDrag = (e: React.PointerEvent, id: string, origDate: number, categoryId: string) => {
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: "milestone", id, startX: e.clientX, origDate, moved: false };
+    drag.current = { kind: "milestone", id, startX: e.clientX, origDate, origCategoryId: categoryId, moved: false };
     setIsDragging(true);
   };
 
-  const beginItemMove = (e: React.PointerEvent, id: string, origStart: number, origEnd: number) => {
+  const beginItemMove = (e: React.PointerEvent, id: string, origStart: number, origEnd: number, categoryId: string) => {
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: "item-move", id, startX: e.clientX, origStart, origEnd, moved: false };
+    drag.current = { kind: "item-move", id, startX: e.clientX, origStart, origEnd, origCategoryId: categoryId, moved: false };
     setIsDragging(true);
   };
 
@@ -350,24 +378,20 @@ export default function RoadmapBoard({
     edge: "start" | "end",
     id: string,
     origStart: number,
-    origEnd: number
+    origEnd: number,
+    categoryId: string
   ) => {
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: edge === "start" ? "item-resize-start" : "item-resize-end", id, startX: e.clientX, origStart, origEnd, moved: false };
-    setIsDragging(true);
-  };
-
-  const beginReorder = (
-    e: React.PointerEvent,
-    entryKind: "item" | "milestone",
-    id: string,
-    categoryId: string,
-    index: number
-  ) => {
-    e.stopPropagation();
-    (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: "lane-reorder", entryKind, id, categoryId, startY: e.clientY, origIndex: index, moved: false };
+    drag.current = {
+      kind: edge === "start" ? "item-resize-start" : "item-resize-end",
+      id,
+      startX: e.clientX,
+      origStart,
+      origEnd,
+      origCategoryId: categoryId,
+      moved: false,
+    };
     setIsDragging(true);
   };
 
@@ -379,12 +403,24 @@ export default function RoadmapBoard({
       const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
       if (deltaDays !== 0) d.moved = true;
       setOverrides((o) => ({ ...o, [d.id]: { start: d.origDate + deltaDays * DAY, end: d.origDate + deltaDays * DAY } }));
+      const hovered = findHoveredLane(e.clientY);
+      const currentCat = dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
+      if (hovered && hovered !== currentCat) {
+        setDragCategoryOverride({ id: d.id, categoryId: hovered });
+        if (hovered !== d.origCategoryId) d.moved = true;
+      }
       return;
     }
     if (d.kind === "item-move") {
       const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
       if (deltaDays !== 0) d.moved = true;
       setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart + deltaDays * DAY, end: d.origEnd + deltaDays * DAY } }));
+      const hovered = findHoveredLane(e.clientY);
+      const currentCat = dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
+      if (hovered && hovered !== currentCat) {
+        setDragCategoryOverride({ id: d.id, categoryId: hovered });
+        if (hovered !== d.origCategoryId) d.moved = true;
+      }
       return;
     }
     if (d.kind === "item-resize-start") {
@@ -401,11 +437,6 @@ export default function RoadmapBoard({
       setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart, end: newEnd } }));
       return;
     }
-    if (d.kind === "lane-reorder") {
-      const deltaY = e.clientY - d.startY;
-      if (Math.abs(deltaY) > 2) d.moved = true;
-      setReorderDrag({ id: d.id, deltaY });
-    }
   };
 
   const endDrag = (e: React.PointerEvent) => {
@@ -416,23 +447,27 @@ export default function RoadmapBoard({
 
     if (d.kind === "milestone") {
       const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-      if (!d.moved || deltaDays === 0) {
+      const resolvedCategoryId = dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
+      const categoryChanged = resolvedCategoryId !== d.origCategoryId;
+      if (!d.moved || (deltaDays === 0 && !categoryChanged)) {
         setOverrides((o) => {
           const { [d.id]: _, ...rest } = o;
           return rest;
         });
+        if (dragCategoryOverride?.id === d.id) setDragCategoryOverride(null);
         setPanel({ kind: "milestone", id: d.id });
         return;
       }
       const newDate = iso(d.origDate + deltaDays * DAY);
       startTransition(async () => {
         try {
-          await updateMilestone(d.id, { date: newDate });
+          await updateMilestone(d.id, { date: newDate, ...(categoryChanged ? { categoryId: resolvedCategoryId } : {}) });
         } catch {
           setOverrides((o) => {
             const { [d.id]: _, ...rest } = o;
             return rest;
           });
+          setDragCategoryOverride(null);
         }
       });
       return;
@@ -440,11 +475,15 @@ export default function RoadmapBoard({
 
     if (d.kind === "item-move" || d.kind === "item-resize-start" || d.kind === "item-resize-end") {
       const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-      if (!d.moved || deltaDays === 0) {
+      const resolvedCategoryId =
+        d.kind === "item-move" && dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
+      const categoryChanged = resolvedCategoryId !== d.origCategoryId;
+      if (!d.moved || (deltaDays === 0 && !categoryChanged)) {
         setOverrides((o) => {
           const { [d.id]: _, ...rest } = o;
           return rest;
         });
+        if (dragCategoryOverride?.id === d.id) setDragCategoryOverride(null);
         setPanel({ kind: "item", id: d.id });
         return;
       }
@@ -460,47 +499,84 @@ export default function RoadmapBoard({
       }
       startTransition(async () => {
         try {
-          await updateItem(d.id, { startDate: iso(newStart), endDate: iso(newEnd) });
+          await updateItem(d.id, {
+            startDate: iso(newStart),
+            endDate: iso(newEnd),
+            ...(categoryChanged ? { categoryId: resolvedCategoryId } : {}),
+          });
         } catch {
           setOverrides((o) => {
             const { [d.id]: _, ...rest } = o;
             return rest;
           });
+          setDragCategoryOverride(null);
         }
       });
       return;
-    }
-
-    if (d.kind === "lane-reorder") {
-      setReorderDrag(null);
-      if (!d.moved) {
-        setPanel({ kind: d.entryKind, id: d.id });
-        return;
-      }
-      const merged = laneEntries(d.categoryId);
-      const deltaY = e.clientY - d.startY;
-      const rawIndex = d.origIndex + Math.round(deltaY / 38);
-      const clamped = Math.max(0, Math.min(merged.length - 1, rawIndex));
-      if (clamped !== d.origIndex) {
-        const reordered = [...merged];
-        const [moved] = reordered.splice(d.origIndex, 1);
-        reordered.splice(clamped, 0, moved);
-        // No local optimistic order state to revert here (the transient
-        // drag offset above is already cleared) — the list simply stays in
-        // its last-known-good order if this fails, matching current data.
-        startTransition(() =>
-          reorderLane(
-            d.categoryId,
-            reordered.map((e2) => ({ id: e2.entry.id, kind: e2.kind }))
-          ).catch(() => {})
-        );
-      }
     }
   };
 
   const itemDates = (i: ItemT) =>
     overrides[i.id] ?? { start: parse(i.startDate), end: parse(i.endDate) };
   const msDate = (m: MilestoneT) => overrides[m.id]?.start ?? parse(m.date);
+
+  // Items and milestones share one vertical stack per lane, packed
+  // compactly: entries that don't overlap in time share a row instead of
+  // each getting a dedicated one. Recomputes live during a drag since
+  // itemDates/msDate already merge the live `overrides` (date).
+  //
+  // Deliberately keyed by the entry's STORED categoryId, not the live
+  // dragCategoryOverride: re-parenting a dragged entry's DOM node into a
+  // different lane's subtree mid-gesture makes React unmount+remount it,
+  // which silently drops native pointer capture and kills all further
+  // move/up events for that drag. The entry stays visually in its origin
+  // lane (only its date-driven x/row can move) until the drop commits and
+  // fresh server data naturally re-parents it on the next clean render.
+  // dragCategoryOverride is still tracked (see onDragMove/endDrag) purely
+  // to resolve which lane to persist to, and to highlight the hovered lane.
+  const packedByLane = useMemo(() => {
+    const byCategory = new Map<string, LaneEntry[]>();
+    const push = (cid: string, e: LaneEntry) => {
+      const list = byCategory.get(cid) ?? [];
+      list.push(e);
+      byCategory.set(cid, list);
+    };
+    for (const i of allItems) push(i.categoryId, { kind: "item", sortOrder: i.sortOrder, entry: i });
+    for (const m of milestones) {
+      if (hiddenTypes.has(m.type)) continue; // hidden milestones free their row
+      push(m.categoryId, { kind: "milestone", sortOrder: m.sortOrder, entry: m });
+    }
+
+    const map = new Map<string, { packed: (LaneEntry & { row: number })[]; rowCount: number }>();
+    const HALF_DAY = DAY / 2;
+    for (const c of categories) {
+      const withRange = (byCategory.get(c.id) ?? []).map((e) => {
+        if (e.kind === "item") {
+          const d = itemDates(e.entry);
+          return { e, start: d.start, end: d.end + DAY }; // +DAY matches ItemBar's own inclusive rendering
+        }
+        const date = msDate(e.entry);
+        const w = measureMilestoneWidth(e.entry.name);
+        return { e, start: date, end: date + (w / pxPerDay) * DAY };
+      });
+      withRange.sort((a, b) => a.start - b.start || a.e.sortOrder - b.e.sortOrder || a.e.entry.id.localeCompare(b.e.entry.id));
+      const rowEnds: number[] = [];
+      const packed: (LaneEntry & { row: number })[] = [];
+      for (const { e, start, end } of withRange) {
+        let row = rowEnds.findIndex((endT) => endT + HALF_DAY <= start);
+        if (row === -1) {
+          row = rowEnds.length;
+          rowEnds.push(end);
+        } else {
+          rowEnds[row] = end;
+        }
+        packed.push({ ...e, row });
+      }
+      map.set(c.id, { packed, rowCount: rowEnds.length });
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categories, milestones, overrides, pxPerDay, hiddenTypes]);
 
   const selectedItem =
     panel?.kind === "item" ? allItems.find((i) => i.id === panel.id) ?? null : null;
@@ -550,6 +626,7 @@ export default function RoadmapBoard({
         >
           Add milestone
         </button>
+        <ThemeMenu roadmapId={currentRoadmapId} currentTheme={currentTheme} />
         <button
           className="btn-primary"
           onClick={() => setPanel({ kind: "new-item" })}
@@ -598,12 +675,16 @@ export default function RoadmapBoard({
             </div>
           </div>
 
-          {/* Category swimlanes — items and milestones share one stack */}
+          {/* Category swimlanes — items and milestones share one stack, packed compactly by date */}
           {categories.map((c, laneIdx) => {
-            const merged = laneEntries(c.id);
+            const { packed, rowCount } = packedByLane.get(c.id) ?? { packed: [], rowCount: 0 };
             return (
               <div
                 key={c.id}
+                ref={(el) => {
+                  if (el) laneRefs.current.set(c.id, el);
+                  else laneRefs.current.delete(c.id);
+                }}
                 className={`flex border-b border-border/70 ${
                   laneIdx < categories.length - 1 ? "mb-3" : ""
                 }`}
@@ -613,8 +694,10 @@ export default function RoadmapBoard({
                   title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
                   className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border px-4 text-left hover:brightness-110 ${
                     hiddenCategories.has(c.id) ? "opacity-50" : ""
+                  } ${
+                    isDragging && dragCategoryOverride?.categoryId === c.id ? "ring-2 ring-inset ring-white" : ""
                   }`}
-                  style={{ minHeight: Math.max(56, merged.length * 38 + 22), background: c.color }}
+                  style={{ minHeight: Math.max(56, rowCount * 38 + 22), background: c.color }}
                 >
                   <span
                     className={`truncate text-sm font-medium text-white ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
@@ -624,7 +707,7 @@ export default function RoadmapBoard({
                 </button>
                 <div
                   className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
-                  style={{ width, minHeight: Math.max(56, merged.length * 38 + 22) }}
+                  style={{ width, minHeight: Math.max(56, rowCount * 38 + 22) }}
                 >
                   <GridLines segments={headerSegments} x={x} />
                   {zoomBand === "mixed" && (
@@ -634,20 +717,18 @@ export default function RoadmapBoard({
                     />
                   )}
                   <TodayLine x={x(today)} />
-                  {merged.map((entry, idx) =>
+                  {packed.map((entry) =>
                     entry.kind === "item" ? (
                       <ItemBar
                         key={entry.entry.id}
                         item={entry.entry}
-                        idx={idx}
+                        row={entry.row}
                         color={c.color}
                         d={itemDates(entry.entry)}
                         x={x}
                         isDragging={isDragging}
-                        dragY={reorderDrag?.id === entry.entry.id ? reorderDrag.deltaY : 0}
                         onBeginMove={beginItemMove}
                         onBeginResize={beginItemResize}
-                        onBeginReorder={(e, id, categoryId, index) => beginReorder(e, "item", id, categoryId, index)}
                         onDragMove={onDragMove}
                         onEndDrag={endDrag}
                       />
@@ -655,14 +736,12 @@ export default function RoadmapBoard({
                       <MilestoneMarker
                         key={entry.entry.id}
                         milestone={entry.entry}
-                        idx={idx}
+                        row={entry.row}
                         date={msDate(entry.entry)}
                         x={x}
                         hidden={hiddenTypes.has(entry.entry.type)}
                         isDragging={isDragging}
-                        dragY={reorderDrag?.id === entry.entry.id ? reorderDrag.deltaY : 0}
                         onBeginDrag={beginMilestoneDrag}
-                        onBeginReorder={(e, id, categoryId, index) => beginReorder(e, "milestone", id, categoryId, index)}
                         onDragMove={onDragMove}
                         onEndDrag={endDrag}
                       />
@@ -698,7 +777,7 @@ export default function RoadmapBoard({
 
       {panel?.kind === "lanes" && (
         <PanelFrame title="Manage lanes" onClose={() => setPanel(null)}>
-          <LaneManager categories={categories} roadmapId={currentRoadmapId} currentTheme={currentTheme} />
+          <LaneManager categories={categories} roadmapId={currentRoadmapId} />
         </PanelFrame>
       )}
       {panel?.kind === "new-item" && (
@@ -727,28 +806,31 @@ export default function RoadmapBoard({
 
 function ItemBar({
   item,
-  idx,
+  row,
   color,
   d,
   x,
   isDragging,
-  dragY,
   onBeginMove,
   onBeginResize,
-  onBeginReorder,
   onDragMove,
   onEndDrag,
 }: {
   item: ItemT;
-  idx: number;
+  row: number;
   color: string;
   d: { start: number; end: number };
   x: (t: number) => number;
   isDragging: boolean;
-  dragY: number;
-  onBeginMove: (e: React.PointerEvent, id: string, origStart: number, origEnd: number) => void;
-  onBeginResize: (e: React.PointerEvent, edge: "start" | "end", id: string, origStart: number, origEnd: number) => void;
-  onBeginReorder: (e: React.PointerEvent, id: string, categoryId: string, index: number) => void;
+  onBeginMove: (e: React.PointerEvent, id: string, origStart: number, origEnd: number, categoryId: string) => void;
+  onBeginResize: (
+    e: React.PointerEvent,
+    edge: "start" | "end",
+    id: string,
+    origStart: number,
+    origEnd: number,
+    categoryId: string
+  ) => void;
   onDragMove: (e: React.PointerEvent) => void;
   onEndDrag: (e: React.PointerEvent) => void;
 }) {
@@ -759,35 +841,27 @@ function ItemBar({
   return (
     <div
       className="group absolute"
-      style={{ left: left - 14, width: w + 14, top: 12 + idx * 38 + dragY }}
+      style={{ left, width: w, top: 12 + row * 38 }}
       onMouseEnter={hover.onMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
-      <div
-        className="absolute left-0 top-0 flex h-7 w-3.5 cursor-grab touch-none items-center justify-center text-text-muted opacity-0 group-hover:opacity-60 active:cursor-grabbing"
-        onPointerDown={(e) => onBeginReorder(e, item.id, item.categoryId, idx)}
-        onPointerMove={onDragMove}
-        onPointerUp={onEndDrag}
-      >
-        ⠿
-      </div>
       <button
-        className="absolute top-0 z-10 h-7 cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
-        style={{ left: 14, width: w, background: idx % 2 === 1 ? darken(color, 0.18) : color }}
-        onPointerDown={(e) => onBeginMove(e, item.id, d.start, d.end)}
+        className="absolute top-0 z-10 h-7 w-full cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
+        style={{ background: row % 2 === 1 ? darken(color, 0.18) : color }}
+        onPointerDown={(e) => onBeginMove(e, item.id, d.start, d.end, item.categoryId)}
         onPointerMove={onDragMove}
         onPointerUp={onEndDrag}
       >
         <div
           className="absolute left-0 top-0 z-10 h-full w-2 cursor-ew-resize"
-          onPointerDown={(e) => onBeginResize(e, "start", item.id, d.start, d.end)}
+          onPointerDown={(e) => onBeginResize(e, "start", item.id, d.start, d.end, item.categoryId)}
           onPointerMove={onDragMove}
           onPointerUp={onEndDrag}
         />
         <span className="block truncate px-2.5">{item.name}</span>
         <div
           className="absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize"
-          onPointerDown={(e) => onBeginResize(e, "end", item.id, d.start, d.end)}
+          onPointerDown={(e) => onBeginResize(e, "end", item.id, d.start, d.end, item.categoryId)}
           onPointerMove={onDragMove}
           onPointerUp={onEndDrag}
         />
@@ -805,26 +879,22 @@ function ItemBar({
 
 function MilestoneMarker({
   milestone,
-  idx,
+  row,
   date,
   x,
   hidden,
   isDragging,
-  dragY,
   onBeginDrag,
-  onBeginReorder,
   onDragMove,
   onEndDrag,
 }: {
   milestone: MilestoneT;
-  idx: number;
+  row: number;
   date: number;
   x: (t: number) => number;
   hidden: boolean;
   isDragging: boolean;
-  dragY: number;
-  onBeginDrag: (e: React.PointerEvent, id: string, origDate: number) => void;
-  onBeginReorder: (e: React.PointerEvent, id: string, categoryId: string, index: number) => void;
+  onBeginDrag: (e: React.PointerEvent, id: string, origDate: number, categoryId: string) => void;
   onDragMove: (e: React.PointerEvent) => void;
   onEndDrag: (e: React.PointerEvent) => void;
 }) {
@@ -832,21 +902,13 @@ function MilestoneMarker({
   return (
     <div
       className={`group absolute z-10 ${hidden ? "pointer-events-none opacity-20" : ""}`}
-      style={{ left: x(date) - 14, top: 12 + idx * 38 + dragY }}
+      style={{ left: x(date), top: 12 + row * 38 }}
       onMouseEnter={hover.onMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
-      <div
-        className="absolute left-0 top-0 flex h-7 w-3.5 cursor-grab touch-none items-center justify-center text-text-muted opacity-0 group-hover:opacity-60 active:cursor-grabbing"
-        onPointerDown={(e) => onBeginReorder(e, milestone.id, milestone.categoryId, idx)}
-        onPointerMove={onDragMove}
-        onPointerUp={onEndDrag}
-      >
-        ⠿
-      </div>
       <button
-        className="focus-ring absolute left-3.5 top-0 flex h-7 cursor-grab touch-none items-center gap-1 whitespace-nowrap rounded-full px-1.5 hover:bg-surface active:cursor-grabbing"
-        onPointerDown={(e) => onBeginDrag(e, milestone.id, date)}
+        className="focus-ring absolute left-0 top-0 flex h-7 cursor-grab touch-none items-center gap-1 whitespace-nowrap rounded-full px-1.5 hover:bg-surface active:cursor-grabbing"
+        onPointerDown={(e) => onBeginDrag(e, milestone.id, date, milestone.categoryId)}
         onPointerMove={onDragMove}
         onPointerUp={onEndDrag}
       >
@@ -1110,24 +1172,53 @@ function MilestoneForm({
   );
 }
 
-function ThemePicker({ roadmapId, currentTheme }: { roadmapId: string; currentTheme: string }) {
+function ThemeMenu({ roadmapId, currentTheme }: { roadmapId: string; currentTheme: string }) {
+  const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const active = ROADMAP_THEMES[currentTheme] ?? ROADMAP_THEMES.indigo;
+
   return (
-    <div className="border-t border-border pt-4">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">Theme</h3>
-      <div className="flex flex-wrap gap-2">
-        {Object.entries(ROADMAP_THEMES).map(([key, t]) => (
-          <button
-            key={key}
-            title={t.label}
-            aria-label={`Apply ${t.label} theme`}
-            disabled={pending}
-            className={`h-8 w-8 rounded-full ring-offset-2 ${currentTheme === key ? "ring-2 ring-accent" : ""}`}
-            style={{ background: t.accent }}
-            onClick={() => start(() => applyRoadmapTheme(roadmapId, key))}
-          />
-        ))}
-      </div>
+    <div className="relative" ref={ref}>
+      <button className="btn-ghost" onClick={() => setOpen((o) => !o)} aria-haspopup="true" aria-expanded={open}>
+        <span className="h-3 w-3 rounded-full" style={{ background: active.accent }} />
+        Theme <span className="text-text-muted">▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-border bg-surface p-3 shadow-lg">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">Theme</h3>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(ROADMAP_THEMES).map(([key, t]) => (
+              <button
+                key={key}
+                title={t.label}
+                aria-label={`Apply ${t.label} theme`}
+                disabled={pending}
+                className={`h-8 w-8 rounded-full ring-offset-2 ${currentTheme === key ? "ring-2 ring-accent" : ""}`}
+                style={{ background: t.accent }}
+                onClick={() => start(() => applyRoadmapTheme(roadmapId, key))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1135,11 +1226,9 @@ function ThemePicker({ roadmapId, currentTheme }: { roadmapId: string; currentTh
 function LaneManager({
   categories,
   roadmapId,
-  currentTheme,
 }: {
   categories: CategoryT[];
   roadmapId: string;
-  currentTheme: string;
 }) {
   const [name, setName] = useState("");
   const [color, setColor] = useState(SWATCHES[0]);
@@ -1195,7 +1284,6 @@ function LaneManager({
           </button>
         </div>
       </div>
-      <ThemePicker roadmapId={roadmapId} currentTheme={currentTheme} />
     </div>
   );
 }
