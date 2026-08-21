@@ -493,6 +493,43 @@ export async function deleteCategory(id: string) {
   revalidatePath("/roadmap");
 }
 
+// Inserts a new item/milestone at the sortOrder rank matching its date among
+// the category's existing entries (both kinds), bumping everyone at/after
+// that rank up by one — rather than always appending at the end. sortOrder
+// is the primary key roadmap lane packing sorts by, so an out-of-chronological
+// -order insert (e.g. backfilling an earlier item after later ones already
+// exist) would otherwise pack last and needlessly open a new row.
+async function nextSortOrderForDate(categoryId: string, dateMs: number): Promise<number> {
+  const [items, mss] = await Promise.all([
+    prisma.roadmapItem.findMany({ where: { categoryId }, select: { id: true, sortOrder: true, startDate: true } }),
+    prisma.milestone.findMany({ where: { categoryId }, select: { id: true, sortOrder: true, date: true } }),
+  ]);
+  const rank =
+    items.filter((i) => i.startDate.getTime() <= dateMs).length +
+    mss.filter((m) => m.date.getTime() <= dateMs).length;
+  const bumpItems = items.filter((i) => i.sortOrder >= rank);
+  const bumpMs = mss.filter((m) => m.sortOrder >= rank);
+  if (bumpItems.length > 0 || bumpMs.length > 0) {
+    await prisma.$transaction([
+      ...bumpItems.map((i) => prisma.roadmapItem.update({ where: { id: i.id }, data: { sortOrder: i.sortOrder + 1 } })),
+      ...bumpMs.map((m) => prisma.milestone.update({ where: { id: m.id }, data: { sortOrder: m.sortOrder + 1 } })),
+    ]);
+  }
+  return rank;
+}
+
+// Append-at-end sortOrder for an entry moving into a category via the edit
+// form's Lane dropdown (as opposed to a drag, which computes its own via
+// commitLaneDrop) — keeps the destination lane's packing well-defined
+// instead of leaving the entry's old, now-meaningless sortOrder in place.
+async function appendSortOrder(categoryId: string): Promise<number> {
+  const [maxItem, maxMs] = await Promise.all([
+    prisma.roadmapItem.aggregate({ where: { categoryId }, _max: { sortOrder: true } }),
+    prisma.milestone.aggregate({ where: { categoryId }, _max: { sortOrder: true } }),
+  ]);
+  return Math.max(maxItem._max.sortOrder ?? -1, maxMs._max.sortOrder ?? -1) + 1;
+}
+
 export async function createItem(data: {
   categoryId: string;
   name: string;
@@ -502,10 +539,7 @@ export async function createItem(data: {
 }) {
   await requireSession();
   if (!data.name.trim()) return;
-  const max = await prisma.roadmapItem.aggregate({
-    where: { categoryId: data.categoryId },
-    _max: { sortOrder: true },
-  });
+  const sortOrder = await nextSortOrderForDate(data.categoryId, new Date(data.startDate).getTime());
   await prisma.roadmapItem.create({
     data: {
       categoryId: data.categoryId,
@@ -513,7 +547,7 @@ export async function createItem(data: {
       description: data.description,
       startDate: new Date(data.startDate),
       endDate: new Date(data.endDate),
-      sortOrder: (max._max.sortOrder ?? 0) + 1,
+      sortOrder,
     },
   });
   revalidatePath("/roadmap");
@@ -524,10 +558,11 @@ export async function updateItem(
   data: { categoryId?: string; name?: string; description?: string; startDate?: string; endDate?: string }
 ) {
   await requireSession();
+  const sortOrder = data.categoryId !== undefined ? await appendSortOrder(data.categoryId) : undefined;
   await prisma.roadmapItem.update({
     where: { id },
     data: {
-      ...(data.categoryId !== undefined ? { categoryId: data.categoryId } : {}),
+      ...(data.categoryId !== undefined ? { categoryId: data.categoryId, sortOrder } : {}),
       ...(data.name !== undefined ? { name: data.name.trim() } : {}),
       ...(data.description !== undefined ? { description: data.description } : {}),
       ...(data.startDate !== undefined ? { startDate: new Date(data.startDate) } : {}),
@@ -553,11 +588,7 @@ export async function createMilestone(data: {
 }) {
   await requireSession();
   if (!data.name.trim()) return;
-  const [maxItem, maxMs] = await Promise.all([
-    prisma.roadmapItem.aggregate({ where: { categoryId: data.categoryId }, _max: { sortOrder: true } }),
-    prisma.milestone.aggregate({ where: { categoryId: data.categoryId }, _max: { sortOrder: true } }),
-  ]);
-  const nextOrder = Math.max(maxItem._max.sortOrder ?? -1, maxMs._max.sortOrder ?? -1) + 1;
+  const sortOrder = await nextSortOrderForDate(data.categoryId, new Date(data.date).getTime());
   await prisma.milestone.create({
     data: {
       name: data.name.trim(),
@@ -566,7 +597,7 @@ export async function createMilestone(data: {
       description: data.description,
       roadmapId: data.roadmapId,
       categoryId: data.categoryId,
-      sortOrder: nextOrder,
+      sortOrder,
     },
   });
   revalidatePath("/roadmap");
@@ -577,6 +608,7 @@ export async function updateMilestone(
   data: { name?: string; type?: MilestoneType; date?: string; description?: string; categoryId?: string }
 ) {
   await requireSession();
+  const sortOrder = data.categoryId !== undefined ? await appendSortOrder(data.categoryId) : undefined;
   await prisma.milestone.update({
     where: { id },
     data: {
@@ -584,9 +616,47 @@ export async function updateMilestone(
       ...(data.type !== undefined ? { type: data.type } : {}),
       ...(data.date !== undefined ? { date: new Date(data.date) } : {}),
       ...(data.description !== undefined ? { description: data.description } : {}),
-      ...(data.categoryId !== undefined ? { categoryId: data.categoryId } : {}),
+      ...(data.categoryId !== undefined ? { categoryId: data.categoryId, sortOrder } : {}),
     },
   });
+  revalidatePath("/roadmap");
+}
+
+// Commits a manual drag-to-row drop: renumbers the destination lane's full
+// item+milestone sequence to dense 0..N-1 (computed client-side from the
+// live drag position) and folds the dragged entry's own resolved date/lane
+// patch into that same per-row update, in one transaction.
+export async function commitLaneDrop(params: {
+  categoryId: string;
+  orderedEntries: { id: string; kind: "item" | "milestone" }[];
+  draggedId: string;
+  itemDates?: { startDate: string; endDate: string };
+  milestoneDate?: string;
+  categoryChanged: boolean;
+}) {
+  await requireSession();
+  const { categoryId, orderedEntries, draggedId, itemDates, milestoneDate, categoryChanged } = params;
+  await prisma.$transaction(
+    orderedEntries.map(({ id, kind }, index) => {
+      const isDragged = id === draggedId;
+      if (kind === "item") {
+        const patch = isDragged
+          ? {
+              ...(itemDates ? { startDate: new Date(itemDates.startDate), endDate: new Date(itemDates.endDate) } : {}),
+              ...(categoryChanged ? { categoryId } : {}),
+            }
+          : {};
+        return prisma.roadmapItem.update({ where: { id }, data: { sortOrder: index, ...patch } });
+      }
+      const patch = isDragged
+        ? {
+            ...(milestoneDate ? { date: new Date(milestoneDate) } : {}),
+            ...(categoryChanged ? { categoryId } : {}),
+          }
+        : {};
+      return prisma.milestone.update({ where: { id }, data: { sortOrder: index, ...patch } });
+    })
+  );
   revalidatePath("/roadmap");
 }
 

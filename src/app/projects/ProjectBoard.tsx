@@ -309,6 +309,10 @@ export default function ProjectBoard({
   }, [byParent, sort]);
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const today = useMemo(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }, []);
 
   const descendantCount = useMemo(() => {
     const counts = new Map<string, number>();
@@ -572,6 +576,8 @@ export default function ProjectBoard({
                         node={root}
                         count={descendantCount.get(root.id) ?? 0}
                         byParent={orderedChildren}
+                        byId={byId}
+                        today={today}
                         visible={visible}
                         collapsed={collapsed}
                         toggle={toggle}
@@ -615,6 +621,11 @@ export default function ProjectBoard({
       ) : view === "kanban" ? (
         <KanbanBoard
           nodes={nodes.filter((n) => visible.has(n.id))}
+          byParent={orderedChildren}
+          byId={byId}
+          today={today}
+          collapsed={collapsed}
+          toggle={toggle}
           onSelect={setSelectedId}
           filterActive={filterActive}
         />
@@ -823,6 +834,8 @@ function GroupHeader({
   node,
   count,
   byParent,
+  byId,
+  today,
   visible,
   collapsed,
   toggle,
@@ -838,6 +851,8 @@ function GroupHeader({
   node: NodeT;
   count: number;
   byParent: Map<string | null, NodeT[]>;
+  byId: Map<string, NodeT>;
+  today: Date;
   visible: Set<string>;
   collapsed: Set<string>;
   toggle: (id: string) => void;
@@ -853,6 +868,12 @@ function GroupHeader({
   const kids = (byParent.get(node.id) ?? []).filter((k) => visible.has(k.id));
   const isCollapsed = collapsed.has(node.id);
   const [adding, setAdding] = useState(false);
+  // "Overall project date" — the earliest start / latest end across this
+  // project and all its descendants, not just the root's own (often unset)
+  // date fields, so the summary stays meaningful even when the project
+  // itself has no dates but its breakdown items do.
+  const extent = dateExtent(node.id, byParent, byId, today);
+  const extentStr = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 
   return (
     <div>
@@ -884,21 +905,70 @@ function GroupHeader({
           >
             ▸
           </button>
-          <button
-            onClick={() => onSelect(node.id)}
-            className="focus-ring min-w-0 flex-1 truncate rounded text-left text-[15px] font-semibold"
-          >
-            {node.name}
-          </button>
+          <div className="min-w-0 flex-1">
+            <button
+              onClick={() => onSelect(node.id)}
+              className="focus-ring block w-full truncate rounded text-left text-[15px] font-semibold"
+            >
+              {node.name}
+            </button>
+            {node.description && (
+              <p className="truncate text-xs text-text-muted" title={node.description}>
+                {node.description}
+              </p>
+            )}
+          </div>
           <span className="on-accent figure shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px]">{count}</span>
         </div>
-        <div />
-        <div />
-        <div />
-        <div />
-        <div />
-        <div />
-        <div />
+        <div className="flex items-center gap-2 px-3">
+          {node.owner ? (
+            <>
+              <span
+                className="figure flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                style={{ background: ownerColor(node.owner) }}
+              >
+                {ownerInitials(node.owner)}
+              </span>
+              <span className="truncate text-xs text-text-muted">{node.owner}</span>
+            </>
+          ) : (
+            <span className="text-xs text-text-muted">—</span>
+          )}
+        </div>
+        <div className="flex items-center px-2">
+          <StatusSelect node={node} />
+        </div>
+        <div className="flex items-center px-2">
+          <PrioritySelect node={node} />
+        </div>
+        <div className="flex items-center gap-2 px-3">
+          <ProgressBar value={node.progress} className="w-16" />
+          <span className="figure text-xs text-text-muted">{node.progress}%</span>
+        </div>
+        <div className="flex items-center justify-center px-2">
+          {node.link && (
+            <a
+              href={node.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={node.link}
+              className="focus-ring text-text-muted hover:text-accent"
+            >
+              🔗
+            </a>
+          )}
+        </div>
+        <div className="flex items-center justify-center px-2">
+          {node.attachments.length > 0 && (
+            <span className="figure text-[11px] text-text-muted" title={`${node.attachments.length} attachment(s)`}>
+              📎{node.attachments.length}
+            </span>
+          )}
+        </div>
+        <div className="figure flex items-center justify-end px-3 text-xs text-text-muted" title="Earliest start → latest end across this project and its breakdown items">
+          {fmtDate(extentStr(extent.start))} → {fmtDate(extentStr(extent.end))}
+        </div>
         <div className="flex justify-center">
           <button
             title="Add child item"
@@ -1481,14 +1551,101 @@ function SidePanel({
   );
 }
 
+// Kanban has no natural nesting (unlike Table's tree rows), so "collapse
+// hides children, project summary stays visible" is mirrored by grouping
+// cards into one collapsible section per top-level project — each with its
+// own always-visible summary header and its own scoped status-column board
+// underneath, rather than one board sharing status columns across every
+// project.
 function KanbanBoard({
   nodes,
+  byParent,
+  byId,
+  today,
+  collapsed,
+  toggle,
   onSelect,
   filterActive,
 }: {
   nodes: NodeT[];
+  byParent: Map<string | null, NodeT[]>;
+  byId: Map<string, NodeT>;
+  today: Date;
+  collapsed: Set<string>;
+  toggle: (id: string) => void;
   onSelect: (id: string) => void;
   filterActive: boolean;
+}) {
+  const rootOf = (id: string): string => {
+    let cur = byId.get(id);
+    while (cur?.parentId) {
+      const parent = byId.get(cur.parentId);
+      if (!parent) break;
+      cur = parent;
+    }
+    return cur?.id ?? id;
+  };
+
+  const byRoot = useMemo(() => {
+    const map = new Map<string, NodeT[]>();
+    for (const n of nodes) {
+      const r = rootOf(n.id);
+      if (r === n.id) continue; // the root itself gets the section header, not a card
+      const list = map.get(r) ?? [];
+      list.push(n);
+      map.set(r, list);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, byId]);
+
+  const roots = (byParent.get(null) ?? []).filter((r) => byRoot.has(r.id) || nodes.some((n) => n.id === r.id));
+
+  if (nodes.length === 0) {
+    return (
+      <div className="mt-16 text-center text-sm text-text-muted">
+        {filterActive ? "No items match the current filters." : "No items yet."}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+      {roots.map((root) => (
+        <KanbanProjectSection
+          key={root.id}
+          root={root}
+          items={byRoot.get(root.id) ?? []}
+          byParent={byParent}
+          byId={byId}
+          today={today}
+          isCollapsed={collapsed.has(root.id)}
+          toggle={toggle}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  );
+}
+
+function KanbanProjectSection({
+  root,
+  items,
+  byParent,
+  byId,
+  today,
+  isCollapsed,
+  toggle,
+  onSelect,
+}: {
+  root: NodeT;
+  items: NodeT[];
+  byParent: Map<string | null, NodeT[]>;
+  byId: Map<string, NodeT>;
+  today: Date;
+  isCollapsed: boolean;
+  toggle: (id: string) => void;
+  onSelect: (id: string) => void;
 }) {
   const [, start] = useTransition();
   const [dragOverStatus, setDragOverStatus] = useState<NodeT["status"] | null>(null);
@@ -1497,16 +1654,16 @@ function KanbanBoard({
   // seconds — without this the card would appear to snap back to its
   // original column until the page catches up.
   const [statusOverrides, setStatusOverrides] = useState<Record<string, NodeT["status"]>>({});
-  useEffect(() => setStatusOverrides({}), [nodes]);
+  useEffect(() => setStatusOverrides({}), [items]);
   const statuses = Object.keys(STATUS_META) as NodeT["status"][];
 
   const byStatus = useMemo(() => {
     const map = new Map<NodeT["status"], NodeT[]>();
     for (const s of statuses) map.set(s, []);
-    for (const n of nodes) map.get(statusOverrides[n.id] ?? n.status)?.push(n);
+    for (const n of items) map.get(statusOverrides[n.id] ?? n.status)?.push(n);
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, statusOverrides]);
+  }, [items, statusOverrides]);
 
   const onDrop = (status: NodeT["status"], id: string) => {
     setDragOverStatus(null);
@@ -1523,69 +1680,111 @@ function KanbanBoard({
     });
   };
 
-  if (nodes.length === 0) {
-    return (
-      <div className="mt-16 text-center text-sm text-text-muted">
-        {filterActive ? "No items match the current filters." : "No items yet."}
-      </div>
-    );
-  }
+  const extent = dateExtent(root.id, byParent, byId, today);
+  const extentStr = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 
   return (
-    <div className="flex-1 overflow-x-auto px-6 py-5">
-      <div className="flex min-w-max gap-4">
-        {statuses.map((status) => (
-          <div
-            key={status}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOverStatus(status);
-            }}
-            onDragLeave={() => setDragOverStatus((s) => (s === status ? null : s))}
-            onDrop={(e) => {
-              e.preventDefault();
-              const id = e.dataTransfer.getData("text/node-id");
-              if (id) onDrop(status, id);
-            }}
-            className={`w-64 shrink-0 rounded-xl border bg-bg/60 p-2 ${
-              dragOverStatus === status ? "border-accent" : "border-border"
-            }`}
+    <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border bg-accent/10 px-4 py-3">
+        <button
+          aria-label={isCollapsed ? "Expand" : "Collapse"}
+          onClick={() => toggle(root.id)}
+          className={`focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded text-accent transition-transform ${
+            isCollapsed ? "" : "rotate-90"
+          }`}
+        >
+          ▸
+        </button>
+        <div className="min-w-0 flex-1">
+          <button
+            onClick={() => onSelect(root.id)}
+            className="focus-ring block truncate rounded text-left text-[15px] font-semibold"
           >
-            <div className="mb-2 flex items-center justify-between px-1.5 py-1">
-              <span className={`badge ${STATUS_META[status].bg} ${STATUS_META[status].text}`}>
-                {STATUS_META[status].label}
-              </span>
-              <span className="figure text-xs text-text-muted">{byStatus.get(status)?.length ?? 0}</span>
-            </div>
-            <div className="space-y-2">
-              {byStatus.get(status)?.map((n) => (
-                <button
-                  key={n.id}
-                  draggable
-                  onDragStart={(e) => e.dataTransfer.setData("text/node-id", n.id)}
-                  onClick={() => onSelect(n.id)}
-                  className="focus-ring block w-full cursor-grab rounded-lg border border-border bg-surface p-3 text-left shadow-sm active:cursor-grabbing"
-                >
-                  <p className="truncate text-sm font-medium">{n.name}</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className={`badge ${PRIORITY_META[n.priority].bg} ${PRIORITY_META[n.priority].text}`}>
-                      {PRIORITY_META[n.priority].label}
-                    </span>
-                    {n.owner && <span className="truncate text-xs text-text-muted">{n.owner}</span>}
-                  </div>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <ProgressBar value={n.progress} />
-                    <span className="figure text-[11px] text-text-muted">{n.progress}%</span>
-                  </div>
-                </button>
-              ))}
-              {(byStatus.get(status)?.length ?? 0) === 0 && (
-                <p className="px-1.5 py-2 text-xs text-text-muted">Drop items here</p>
-              )}
-            </div>
+            {root.name}
+          </button>
+          {root.description && (
+            <p className="truncate text-xs text-text-muted" title={root.description}>
+              {root.description}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <div className="w-32">
+            <StatusSelect node={root} />
           </div>
-        ))}
+          <div className="w-28">
+            <PrioritySelect node={root} />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <ProgressBar value={root.progress} className="w-16" />
+            <span className="figure text-xs text-text-muted">{root.progress}%</span>
+          </div>
+          <span
+            className="figure text-xs text-text-muted"
+            title="Earliest start → latest end across this project and its breakdown items"
+          >
+            {fmtDate(extentStr(extent.start))} → {fmtDate(extentStr(extent.end))}
+          </span>
+          <span className="on-accent figure shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px]">{items.length}</span>
+        </div>
       </div>
+      {!isCollapsed && (
+        <div className="overflow-x-auto px-4 py-4">
+          <div className="flex min-w-max gap-4">
+            {statuses.map((status) => (
+              <div
+                key={status}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverStatus(status);
+                }}
+                onDragLeave={() => setDragOverStatus((s) => (s === status ? null : s))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const id = e.dataTransfer.getData("text/node-id");
+                  if (id) onDrop(status, id);
+                }}
+                className={`w-64 shrink-0 rounded-xl border bg-bg/60 p-2 ${
+                  dragOverStatus === status ? "border-accent" : "border-border"
+                }`}
+              >
+                <div className="mb-2 flex items-center justify-between px-1.5 py-1">
+                  <span className={`badge ${STATUS_META[status].bg} ${STATUS_META[status].text}`}>
+                    {STATUS_META[status].label}
+                  </span>
+                  <span className="figure text-xs text-text-muted">{byStatus.get(status)?.length ?? 0}</span>
+                </div>
+                <div className="space-y-2">
+                  {byStatus.get(status)?.map((n) => (
+                    <button
+                      key={n.id}
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData("text/node-id", n.id)}
+                      onClick={() => onSelect(n.id)}
+                      className="focus-ring block w-full cursor-grab rounded-lg border border-border bg-surface p-3 text-left shadow-sm active:cursor-grabbing"
+                    >
+                      <p className="truncate text-sm font-medium">{n.name}</p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className={`badge ${PRIORITY_META[n.priority].bg} ${PRIORITY_META[n.priority].text}`}>
+                          {PRIORITY_META[n.priority].label}
+                        </span>
+                        {n.owner && <span className="truncate text-xs text-text-muted">{n.owner}</span>}
+                      </div>
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <ProgressBar value={n.progress} />
+                        <span className="figure text-[11px] text-text-muted">{n.progress}%</span>
+                      </div>
+                    </button>
+                  ))}
+                  {(byStatus.get(status)?.length ?? 0) === 0 && (
+                    <p className="px-1.5 py-2 text-xs text-text-muted">Drop items here</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

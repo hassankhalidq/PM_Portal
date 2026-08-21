@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   applyRoadmapTheme,
+  commitLaneDrop,
   createCategory,
   createItem,
   createMilestone,
@@ -47,6 +48,10 @@ type LaneEntry =
   | { kind: "milestone"; sortOrder: number; entry: MilestoneT };
 
 const DAY = 86400000;
+const HALF_DAY = DAY / 2;
+const MAX_ZOOM_OUT_DAYS = 546; // 6 quarters (91 days each)
+const ROW_HEIGHT = 38;
+const ROW_TOP = 12;
 
 function darken(hex: string, amt: number) {
   const c = hex.replace("#", "");
@@ -161,12 +166,22 @@ type Panel =
   | { kind: "lanes" }
   | null;
 
-type ZoomBand = "quarterly" | "mixed" | "monthly" | "daily";
+type ZoomBand = "quarterly" | "mixed" | "monthly" | "weekly";
 
 type DragState =
-  | { kind: "milestone"; id: string; startX: number; origDate: number; origCategoryId: string; moved: boolean }
+  | { kind: "milestone"; id: string; startX: number; origDate: number; origCategoryId: string; origRow: number; moved: boolean }
   | {
-      kind: "item-move" | "item-resize-start" | "item-resize-end";
+      kind: "item-move";
+      id: string;
+      startX: number;
+      origStart: number;
+      origEnd: number;
+      origCategoryId: string;
+      origRow: number;
+      moved: boolean;
+    }
+  | {
+      kind: "item-resize-start" | "item-resize-end";
       id: string;
       startX: number;
       origStart: number;
@@ -192,10 +207,13 @@ export default function RoadmapBoard({
   const [panel, setPanel] = useState<Panel>(null);
   // Optimistic date overrides while a drag round-trips to the server.
   const [overrides, setOverrides] = useState<Record<string, { start: number; end: number }>>({});
-  // Transient "this entry is currently hovering a different lane" override
-  // while a cross-lane drag is in progress (cleared once revalidated props
-  // land, mirroring how `overrides` is cleared below).
-  const [dragCategoryOverride, setDragCategoryOverride] = useState<{ id: string; categoryId: string } | null>(null);
+  // Transient "this entry is being dragged to a specific row, possibly in a
+  // different lane" preview (cleared once revalidated props land, mirroring
+  // how `overrides` is cleared below). This is a pure rendering offset —
+  // it never changes which lane's DOM subtree the dragged entry renders in
+  // (see packedByLane below) — re-parenting mid-drag is what broke native
+  // pointer capture last time this file's drag system was reworked.
+  const [dragRowPreview, setDragRowPreview] = useState<{ id: string; categoryId: string; row: number } | null>(null);
   const drag = useRef<DragState | null>(null);
   // A revalidation from an EARLIER action can land while a NEW drag is
   // already in progress (categories/milestones props refresh mid-gesture).
@@ -205,7 +223,7 @@ export default function RoadmapBoard({
   useEffect(() => {
     const activeId = drag.current?.id;
     setOverrides((o) => (activeId && activeId in o ? { [activeId]: o[activeId] } : {}));
-    setDragCategoryOverride((prev) => (prev && prev.id === activeId ? prev : null));
+    setDragRowPreview((prev) => (prev && prev.id === activeId ? prev : null));
   }, [categories, milestones]);
 
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
@@ -236,7 +254,7 @@ export default function RoadmapBoard({
   }, []);
 
   const zoomBand: ZoomBand =
-    pxPerDay <= 5 ? "quarterly" : pxPerDay <= 8 ? "mixed" : pxPerDay <= 16 ? "monthly" : "daily";
+    pxPerDay <= 5 ? "quarterly" : pxPerDay <= 8 ? "mixed" : pxPerDay <= 16 ? "monthly" : "weekly";
 
   // "Now" window = current quarter + next quarter (monthly headers); beyond = "Later" (quarterly). Mixed band only.
   const seam = useMemo(() => addMonths(startOfQuarter(today), 6), [today]);
@@ -257,6 +275,27 @@ export default function RoadmapBoard({
     });
     return hit;
   };
+  // Cursor's row within a lane, absolute (not delta-accumulated) so it's
+  // correct the instant a drag crosses into a differently-sized lane.
+  // `otherEntryCount` = that lane's entries EXCLUDING the dragged one;
+  // valid positions are [0, otherEntryCount] inclusive (otherEntryCount
+  // itself means "new bottom row").
+  const hoveredRow = (clientY: number, categoryId: string, otherEntryCount: number): number => {
+    const el = laneRefs.current.get(categoryId);
+    if (!el) return 0;
+    const relY = clientY - el.getBoundingClientRect().top - ROW_TOP;
+    return Math.max(0, Math.min(otherEntryCount, Math.round(relY / ROW_HEIGHT)));
+  };
+  // Pixel offset between two lanes' current DOM tops, purely for rendering
+  // the drag preview inside a different lane's row band without ever
+  // re-parenting the dragged entry's actual DOM node (see packedByLane).
+  const previewTopOffset = (originCategoryId: string, hoveredCategoryId: string): number => {
+    if (originCategoryId === hoveredCategoryId) return 0;
+    const originEl = laneRefs.current.get(originCategoryId);
+    const targetEl = laneRefs.current.get(hoveredCategoryId);
+    if (!originEl || !targetEl) return 0;
+    return targetEl.getBoundingClientRect().top - originEl.getBoundingClientRect().top;
+  };
   const [containerWidth, setContainerWidth] = useState(0);
   useEffect(() => {
     const el = scrollRef.current;
@@ -265,6 +304,15 @@ export default function RoadmapBoard({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Max zoom-out = 6 quarters visible at once, regardless of screen width —
+  // derived from the measured container width rather than a fixed pxPerDay
+  // floor, so a wider window doesn't let the loosest zoom show more than 18
+  // months.
+  const minPxPerDay = containerWidth > 0 ? Math.max(1, containerWidth / MAX_ZOOM_OUT_DAYS) : 2;
+  useEffect(() => {
+    if (containerWidth > 0) setPxPerDay((p) => Math.max(p, containerWidth / MAX_ZOOM_OUT_DAYS));
+  }, [containerWidth]);
 
   const [rangeStart, rangeEnd] = useMemo(() => {
     let min = startOfQuarter(today);
@@ -318,13 +366,18 @@ export default function RoadmapBoard({
       return segs;
     }
 
-    if (zoomBand === "daily") {
+    if (zoomBand === "weekly") {
+      // Align the first segment to the Monday on/before rangeStart so week
+      // boundaries match the ISO-week convention used elsewhere in this app
+      // (e.g. the Log view's week grouping), rather than raw 7-day chunks
+      // from an arbitrary quarter-start.
+      const d0 = new Date(cursor);
+      const dow = d0.getUTCDay();
+      cursor = cursor - ((dow === 0 ? 7 : dow) - 1) * DAY;
       while (cursor < rangeEnd) {
-        const next = Math.min(cursor + DAY, rangeEnd);
+        const next = Math.min(cursor + 7 * DAY, rangeEnd);
         const d = new Date(cursor);
-        const dayNum = d.getUTCDate();
-        const label = dayNum === 1 ? `${MONTHS[d.getUTCMonth()]} 1` : String(dayNum);
-        segs.push({ label, from: cursor, to: next, zone: "now" });
+        segs.push({ label: `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`, from: cursor, to: next, zone: "now" });
         cursor = next;
       }
       return segs;
@@ -361,15 +414,27 @@ export default function RoadmapBoard({
   // ---- drag handling ----
   const [, startTransition] = useTransition();
 
+  const rowOf = (categoryId: string, id: string): number =>
+    packedByLane.get(categoryId)?.packed.find((p) => p.entry.id === id)?.row ?? 0;
+
   const beginMilestoneDrag = (e: React.PointerEvent, id: string, origDate: number, categoryId: string) => {
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: "milestone", id, startX: e.clientX, origDate, origCategoryId: categoryId, moved: false };
+    drag.current = { kind: "milestone", id, startX: e.clientX, origDate, origCategoryId: categoryId, origRow: rowOf(categoryId, id), moved: false };
     setIsDragging(true);
   };
 
   const beginItemMove = (e: React.PointerEvent, id: string, origStart: number, origEnd: number, categoryId: string) => {
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { kind: "item-move", id, startX: e.clientX, origStart, origEnd, origCategoryId: categoryId, moved: false };
+    drag.current = {
+      kind: "item-move",
+      id,
+      startX: e.clientX,
+      origStart,
+      origEnd,
+      origCategoryId: categoryId,
+      origRow: rowOf(categoryId, id),
+      moved: false,
+    };
     setIsDragging(true);
   };
 
@@ -395,32 +460,48 @@ export default function RoadmapBoard({
     setIsDragging(true);
   };
 
+  // Shared by onDragMove (live preview) and endDrag (commit) so both agree
+  // on exactly the same hovered lane/row and desired date range.
+  const resolveDropTarget = (e: React.PointerEvent, d: Extract<DragState, { kind: "milestone" | "item-move" }>) => {
+    const hoveredCategoryId = findHoveredLane(e.clientY) ?? d.origCategoryId;
+    const restPacked = simulateLanePacking(laneEntriesExcluding(hoveredCategoryId, d.id)).packed;
+    const targetRow = hoveredRow(e.clientY, hoveredCategoryId, restPacked.length);
+    const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+    const desired =
+      d.kind === "milestone"
+        ? (() => {
+            const date = d.origDate + deltaDays * DAY;
+            const w = measureMilestoneWidth(milestones.find((m) => m.id === d.id)?.name ?? "");
+            return { start: date, end: date + (w / pxPerDay) * DAY };
+          })()
+        : { start: d.origStart + deltaDays * DAY, end: d.origEnd + deltaDays * DAY };
+    return { hoveredCategoryId, restPacked, targetRow, desired, deltaDays };
+  };
+
   const onDragMove = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d) return;
 
-    if (d.kind === "milestone") {
-      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-      if (deltaDays !== 0) d.moved = true;
-      setOverrides((o) => ({ ...o, [d.id]: { start: d.origDate + deltaDays * DAY, end: d.origDate + deltaDays * DAY } }));
-      const hovered = findHoveredLane(e.clientY);
-      const currentCat = dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
-      if (hovered && hovered !== currentCat) {
-        setDragCategoryOverride({ id: d.id, categoryId: hovered });
-        if (hovered !== d.origCategoryId) d.moved = true;
+    if (d.kind === "milestone" || d.kind === "item-move") {
+      const { hoveredCategoryId, restPacked, targetRow, desired, deltaDays } = resolveDropTarget(e, d);
+      const rowOrLaneChanged = hoveredCategoryId !== d.origCategoryId || targetRow !== d.origRow;
+      // Only run conflict-avoidance date-shifting when the user has shown
+      // deliberate row/lane intent — a plain horizontal drag that happens
+      // to overlap its current row-mate keeps relying on packedByLane's own
+      // greedy re-pack (which opens a new row automatically), matching the
+      // already-shipped behavior for that case.
+      const resolved = rowOrLaneChanged ? resolveRowConflict(restPacked, targetRow, desired) : desired;
+      setOverrides((o) => ({ ...o, [d.id]: { start: resolved.start, end: d.kind === "milestone" ? resolved.start : resolved.end } }));
+      if (rowOrLaneChanged) {
+        setDragRowPreview((prev) =>
+          prev && prev.id === d.id && prev.categoryId === hoveredCategoryId && prev.row === targetRow
+            ? prev
+            : { id: d.id, categoryId: hoveredCategoryId, row: targetRow }
+        );
+      } else if (dragRowPreview?.id === d.id) {
+        setDragRowPreview(null);
       }
-      return;
-    }
-    if (d.kind === "item-move") {
-      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-      if (deltaDays !== 0) d.moved = true;
-      setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart + deltaDays * DAY, end: d.origEnd + deltaDays * DAY } }));
-      const hovered = findHoveredLane(e.clientY);
-      const currentCat = dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
-      if (hovered && hovered !== currentCat) {
-        setDragCategoryOverride({ id: d.id, categoryId: hovered });
-        if (hovered !== d.origCategoryId) d.moved = true;
-      }
+      if (deltaDays !== 0 || rowOrLaneChanged) d.moved = true;
       return;
     }
     if (d.kind === "item-resize-start") {
@@ -445,71 +526,99 @@ export default function RoadmapBoard({
     setIsDragging(false);
     if (!d) return;
 
-    if (d.kind === "milestone") {
-      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-      const resolvedCategoryId = dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
-      const categoryChanged = resolvedCategoryId !== d.origCategoryId;
-      if (!d.moved || (deltaDays === 0 && !categoryChanged)) {
+    if (d.kind === "milestone" || d.kind === "item-move") {
+      const { hoveredCategoryId, restPacked, targetRow, desired, deltaDays } = resolveDropTarget(e, d);
+      const rowOrLaneChanged = hoveredCategoryId !== d.origCategoryId || targetRow !== d.origRow;
+      if (!d.moved || (deltaDays === 0 && !rowOrLaneChanged)) {
         setOverrides((o) => {
           const { [d.id]: _, ...rest } = o;
           return rest;
         });
-        if (dragCategoryOverride?.id === d.id) setDragCategoryOverride(null);
-        setPanel({ kind: "milestone", id: d.id });
+        if (dragRowPreview?.id === d.id) setDragRowPreview(null);
+        if (d.kind === "milestone") setPanel({ kind: "milestone", id: d.id });
+        else setPanel({ kind: "item", id: d.id });
         return;
       }
-      const newDate = iso(d.origDate + deltaDays * DAY);
+
+      if (rowOrLaneChanged) {
+        // Deliberate row/lane placement — commit via the full-lane renumber
+        // transaction, inserting the dragged entry right after the last
+        // rest-of-lane entry whose own row is <= the target (see plan's
+        // accepted limitation: this can occasionally land one row earlier
+        // than the literal drop pixel if an earlier gap independently fits,
+        // never later, and never corrupts anyone else's placement).
+        const resolved = resolveRowConflict(restPacked, targetRow, desired);
+        let insertAfter = -1;
+        restPacked.forEach((p, i) => {
+          if (p.row <= targetRow) insertAfter = i;
+        });
+        const ordered = restPacked.map((p) => ({ id: p.entry.id, kind: p.kind }));
+        ordered.splice(insertAfter + 1, 0, { id: d.id, kind: d.kind === "milestone" ? "milestone" : "item" });
+        startTransition(async () => {
+          try {
+            await commitLaneDrop({
+              categoryId: hoveredCategoryId,
+              orderedEntries: ordered,
+              draggedId: d.id,
+              categoryChanged: hoveredCategoryId !== d.origCategoryId,
+              ...(d.kind === "milestone"
+                ? { milestoneDate: iso(resolved.start) }
+                : { itemDates: { startDate: iso(resolved.start), endDate: iso(resolved.end) } }),
+            });
+          } catch {
+            setOverrides((o) => {
+              const { [d.id]: _, ...rest } = o;
+              return rest;
+            });
+            setDragRowPreview(null);
+          }
+        });
+        return;
+      }
+
+      // Pure horizontal drag — unchanged simple path, no row/lane commit.
       startTransition(async () => {
         try {
-          await updateMilestone(d.id, { date: newDate, ...(categoryChanged ? { categoryId: resolvedCategoryId } : {}) });
+          if (d.kind === "milestone") {
+            await updateMilestone(d.id, { date: iso(desired.start) });
+          } else {
+            await updateItem(d.id, { startDate: iso(desired.start), endDate: iso(desired.end) });
+          }
         } catch {
           setOverrides((o) => {
             const { [d.id]: _, ...rest } = o;
             return rest;
           });
-          setDragCategoryOverride(null);
         }
       });
       return;
     }
 
-    if (d.kind === "item-move" || d.kind === "item-resize-start" || d.kind === "item-resize-end") {
+    if (d.kind === "item-resize-start" || d.kind === "item-resize-end") {
       const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
-      const resolvedCategoryId =
-        d.kind === "item-move" && dragCategoryOverride?.id === d.id ? dragCategoryOverride.categoryId : d.origCategoryId;
-      const categoryChanged = resolvedCategoryId !== d.origCategoryId;
-      if (!d.moved || (deltaDays === 0 && !categoryChanged)) {
+      if (!d.moved || deltaDays === 0) {
         setOverrides((o) => {
           const { [d.id]: _, ...rest } = o;
           return rest;
         });
-        if (dragCategoryOverride?.id === d.id) setDragCategoryOverride(null);
         setPanel({ kind: "item", id: d.id });
         return;
       }
       let newStart = d.origStart;
       let newEnd = d.origEnd;
-      if (d.kind === "item-move") {
-        newStart += deltaDays * DAY;
-        newEnd += deltaDays * DAY;
-      } else if (d.kind === "item-resize-start") {
+      if (d.kind === "item-resize-start") {
         newStart = Math.min(d.origStart + deltaDays * DAY, d.origEnd - DAY);
       } else {
         newEnd = Math.max(d.origEnd + deltaDays * DAY, d.origStart + DAY);
       }
       startTransition(async () => {
         try {
-          await updateItem(d.id, {
-            startDate: iso(newStart),
-            endDate: iso(newEnd),
-            ...(categoryChanged ? { categoryId: resolvedCategoryId } : {}),
-          });
+          await updateItem(d.id, { startDate: iso(newStart), endDate: iso(newEnd) });
         } catch {
           setOverrides((o) => {
             const { [d.id]: _, ...rest } = o;
             return rest;
           });
-          setDragCategoryOverride(null);
         }
       });
       return;
@@ -520,20 +629,111 @@ export default function RoadmapBoard({
     overrides[i.id] ?? { start: parse(i.startDate), end: parse(i.endDate) };
   const msDate = (m: MilestoneT) => overrides[m.id]?.start ?? parse(m.date);
 
+  // Effective packing interval for one entry — items use their real date
+  // range (+DAY to match ItemBar's own inclusive rendering); milestones are
+  // a point date but reserve pixel-derived width for their icon+label so
+  // they don't visually collide with neighbors.
+  const entryRange = (e: LaneEntry): { start: number; end: number } => {
+    if (e.kind === "item") {
+      const d = itemDates(e.entry);
+      return { start: d.start, end: d.end + DAY };
+    }
+    const date = msDate(e.entry);
+    const w = measureMilestoneWidth(e.entry.name);
+    return { start: date, end: date + (w / pxPerDay) * DAY };
+  };
+
+  // Greedy interval packing, sorted by manual sortOrder (drag-controlled)
+  // first, date only as a tiebreaker — so a user can influence which row an
+  // entry lands in, while the row-fit check (not the sort) is what actually
+  // guarantees no two overlapping entries ever share a row. Shared by the
+  // live packedByLane below and the drop-time conflict simulation.
+  const simulateLanePacking = (entries: LaneEntry[]): { packed: (LaneEntry & { row: number })[]; rowCount: number } => {
+    const withRange = entries.map((e) => ({ e, ...entryRange(e) }));
+    withRange.sort((a, b) => a.e.sortOrder - b.e.sortOrder || a.start - b.start || a.e.entry.id.localeCompare(b.e.entry.id));
+    const rowEnds: number[] = [];
+    const packed: (LaneEntry & { row: number })[] = [];
+    for (const { e, start, end } of withRange) {
+      let row = rowEnds.findIndex((endT) => endT + HALF_DAY <= start);
+      if (row === -1) {
+        row = rowEnds.length;
+        rowEnds.push(end);
+      } else {
+        rowEnds[row] = end;
+      }
+      packed.push({ ...e, row });
+    }
+    return { packed, rowCount: rowEnds.length };
+  };
+
+  // A lane's entries excluding one (the entry currently being dragged), for
+  // simulating "where would everyone ELSE land" during a drag.
+  const laneEntriesExcluding = (categoryId: string, excludeId: string): LaneEntry[] => {
+    const out: LaneEntry[] = [];
+    for (const i of allItems) {
+      if (i.id !== excludeId && i.categoryId === categoryId) out.push({ kind: "item", sortOrder: i.sortOrder, entry: i });
+    }
+    for (const m of milestones) {
+      if (hiddenTypes.has(m.type) || m.id === excludeId || m.categoryId !== categoryId) continue;
+      out.push({ kind: "milestone", sortOrder: m.sortOrder, entry: m });
+    }
+    return out;
+  };
+
+  const rangesOverlap = (a: { start: number; end: number }, b: { start: number; end: number }) =>
+    !(a.end + HALF_DAY <= b.start || b.end + HALF_DAY <= a.start);
+
+  // Manually dropping an entry into a specific row can conflict with a
+  // date-overlapping neighbor already there. Rather than reject the drop or
+  // allow the overlap, shift the DRAGGED entry's own dates (preserving its
+  // duration) by the minimum amount needed to clear it, in the direction
+  // implied by where it was dropped relative to the conflicting neighbor.
+  // Rowmates are pairwise non-overlapping (packing invariant) and sortable
+  // along the timeline, so one monotonic sweep in that direction resolves
+  // any cascade — bounded by the row's size, always terminates.
+  const resolveRowConflict = (
+    restPacked: (LaneEntry & { row: number })[],
+    targetRow: number,
+    desired: { start: number; end: number }
+  ): { start: number; end: number } => {
+    const duration = desired.end - desired.start;
+    const mates = restPacked.filter((m) => m.row === targetRow).map((m) => entryRange(m));
+    const firstConflict = mates.find((m) => rangesOverlap(desired, m));
+    if (!firstConflict) return desired;
+
+    const draggedMid = (desired.start + desired.end) / 2;
+    const mateMid = (firstConflict.start + firstConflict.end) / 2;
+    const pushRight = draggedMid >= mateMid;
+
+    let start = desired.start;
+    let end = desired.end;
+    const ordered = [...mates].sort((a, b) => (pushRight ? a.start - b.start : b.start - a.start));
+    for (const mate of ordered) {
+      if (!rangesOverlap({ start, end }, mate)) continue;
+      if (pushRight) {
+        start = mate.end + DAY; // mate.end is already +DAY-inclusive (entryRange), so this clears the packer's own gap rule
+        end = start + duration;
+      } else {
+        end = mate.start - DAY;
+        start = end - duration;
+      }
+    }
+    return { start, end };
+  };
+
   // Items and milestones share one vertical stack per lane, packed
   // compactly: entries that don't overlap in time share a row instead of
   // each getting a dedicated one. Recomputes live during a drag since
   // itemDates/msDate already merge the live `overrides` (date).
   //
-  // Deliberately keyed by the entry's STORED categoryId, not the live
-  // dragCategoryOverride: re-parenting a dragged entry's DOM node into a
-  // different lane's subtree mid-gesture makes React unmount+remount it,
-  // which silently drops native pointer capture and kills all further
-  // move/up events for that drag. The entry stays visually in its origin
-  // lane (only its date-driven x/row can move) until the drop commits and
-  // fresh server data naturally re-parents it on the next clean render.
-  // dragCategoryOverride is still tracked (see onDragMove/endDrag) purely
-  // to resolve which lane to persist to, and to highlight the hovered lane.
+  // Deliberately keyed by the entry's STORED categoryId, not any live drag
+  // state: re-parenting a dragged entry's DOM node into a different lane's
+  // subtree mid-gesture makes React unmount+remount it, which silently
+  // drops native pointer capture and kills all further move/up events for
+  // that drag. The entry stays visually in its origin lane (only its
+  // rendered x/row can move, via dragRowPreview + previewTopOffset at the
+  // ItemBar/MilestoneMarker call sites) until the drop commits and fresh
+  // server data naturally re-parents it on the next clean render.
   const packedByLane = useMemo(() => {
     const byCategory = new Map<string, LaneEntry[]>();
     const push = (cid: string, e: LaneEntry) => {
@@ -546,34 +746,8 @@ export default function RoadmapBoard({
       if (hiddenTypes.has(m.type)) continue; // hidden milestones free their row
       push(m.categoryId, { kind: "milestone", sortOrder: m.sortOrder, entry: m });
     }
-
     const map = new Map<string, { packed: (LaneEntry & { row: number })[]; rowCount: number }>();
-    const HALF_DAY = DAY / 2;
-    for (const c of categories) {
-      const withRange = (byCategory.get(c.id) ?? []).map((e) => {
-        if (e.kind === "item") {
-          const d = itemDates(e.entry);
-          return { e, start: d.start, end: d.end + DAY }; // +DAY matches ItemBar's own inclusive rendering
-        }
-        const date = msDate(e.entry);
-        const w = measureMilestoneWidth(e.entry.name);
-        return { e, start: date, end: date + (w / pxPerDay) * DAY };
-      });
-      withRange.sort((a, b) => a.start - b.start || a.e.sortOrder - b.e.sortOrder || a.e.entry.id.localeCompare(b.e.entry.id));
-      const rowEnds: number[] = [];
-      const packed: (LaneEntry & { row: number })[] = [];
-      for (const { e, start, end } of withRange) {
-        let row = rowEnds.findIndex((endT) => endT + HALF_DAY <= start);
-        if (row === -1) {
-          row = rowEnds.length;
-          rowEnds.push(end);
-        } else {
-          rowEnds[row] = end;
-        }
-        packed.push({ ...e, row });
-      }
-      map.set(c.id, { packed, rowCount: rowEnds.length });
-    }
+    for (const c of categories) map.set(c.id, simulateLanePacking(byCategory.get(c.id) ?? []));
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categories, milestones, overrides, pxPerDay, hiddenTypes]);
@@ -608,7 +782,7 @@ export default function RoadmapBoard({
           Zoom
           <input
             type="range"
-            min={2}
+            min={minPxPerDay}
             max={32}
             step={1}
             value={pxPerDay}
@@ -695,7 +869,7 @@ export default function RoadmapBoard({
                   className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border px-4 text-left hover:brightness-110 ${
                     hiddenCategories.has(c.id) ? "opacity-50" : ""
                   } ${
-                    isDragging && dragCategoryOverride?.categoryId === c.id ? "ring-2 ring-inset ring-white" : ""
+                    isDragging && dragRowPreview?.categoryId === c.id ? "ring-2 ring-inset ring-white" : ""
                   }`}
                   style={{ minHeight: Math.max(56, rowCount * 38 + 22), background: c.color }}
                 >
@@ -717,12 +891,17 @@ export default function RoadmapBoard({
                     />
                   )}
                   <TodayLine x={x(today)} />
-                  {packed.map((entry) =>
-                    entry.kind === "item" ? (
+                  {packed.map((entry) => {
+                    const top =
+                      dragRowPreview?.id === entry.entry.id
+                        ? ROW_TOP + dragRowPreview.row * ROW_HEIGHT + previewTopOffset(entry.entry.categoryId, dragRowPreview.categoryId)
+                        : ROW_TOP + entry.row * ROW_HEIGHT;
+                    return entry.kind === "item" ? (
                       <ItemBar
                         key={entry.entry.id}
                         item={entry.entry}
                         row={entry.row}
+                        top={top}
                         color={c.color}
                         d={itemDates(entry.entry)}
                         x={x}
@@ -736,7 +915,7 @@ export default function RoadmapBoard({
                       <MilestoneMarker
                         key={entry.entry.id}
                         milestone={entry.entry}
-                        row={entry.row}
+                        top={top}
                         date={msDate(entry.entry)}
                         x={x}
                         hidden={hiddenTypes.has(entry.entry.type)}
@@ -745,8 +924,8 @@ export default function RoadmapBoard({
                         onDragMove={onDragMove}
                         onEndDrag={endDrag}
                       />
-                    )
-                  )}
+                    );
+                  })}
                 </div>
               </div>
             );
@@ -807,6 +986,7 @@ export default function RoadmapBoard({
 function ItemBar({
   item,
   row,
+  top,
   color,
   d,
   x,
@@ -818,6 +998,7 @@ function ItemBar({
 }: {
   item: ItemT;
   row: number;
+  top: number;
   color: string;
   d: { start: number; end: number };
   x: (t: number) => number;
@@ -841,7 +1022,7 @@ function ItemBar({
   return (
     <div
       className="group absolute"
-      style={{ left, width: w, top: 12 + row * 38 }}
+      style={{ left, width: w, top }}
       onMouseEnter={hover.onMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
@@ -879,7 +1060,7 @@ function ItemBar({
 
 function MilestoneMarker({
   milestone,
-  row,
+  top,
   date,
   x,
   hidden,
@@ -889,7 +1070,7 @@ function MilestoneMarker({
   onEndDrag,
 }: {
   milestone: MilestoneT;
-  row: number;
+  top: number;
   date: number;
   x: (t: number) => number;
   hidden: boolean;
@@ -902,7 +1083,7 @@ function MilestoneMarker({
   return (
     <div
       className={`group absolute z-10 ${hidden ? "pointer-events-none opacity-20" : ""}`}
-      style={{ left: x(date), top: 12 + row * 38 }}
+      style={{ left: x(date), top }}
       onMouseEnter={hover.onMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
