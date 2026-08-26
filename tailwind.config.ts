@@ -15,9 +15,9 @@ const config: Config = {
     extend: {
       colors: {
         bg: "var(--bg)",
-        surface: "var(--surface)",
+        surface: { DEFAULT: "var(--surface)", 2: "var(--surface2)", 3: "var(--surface3)" },
         text: { DEFAULT: "var(--text)", muted: withOpacity("--text-muted-rgb") },
-        border: "var(--border)",
+        border: { DEFAULT: "var(--border)", 2: "var(--border2)" },
         accent: { DEFAULT: withOpacity("--accent-rgb"), hover: "var(--accent-hover)" },
         success: withOpacity("--success-rgb"),
         danger: withOpacity("--danger-rgb"),

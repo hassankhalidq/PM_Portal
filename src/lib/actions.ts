@@ -115,6 +115,8 @@ export async function updateNode(
     startDate?: string | null;
     endDate?: string | null;
     description?: string;
+    blockReason?: string;
+    request?: string;
   }
 ) {
   await requireSession();
@@ -136,6 +138,8 @@ export async function updateNode(
         ? { endDate: data.endDate ? new Date(data.endDate) : null }
         : {}),
       ...(data.description !== undefined ? { description: data.description } : {}),
+      ...(data.blockReason !== undefined ? { blockReason: data.blockReason } : {}),
+      ...(data.request !== undefined ? { request: data.request.trim() } : {}),
     },
   });
   revalidatePath("/projects");

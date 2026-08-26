@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: "Project delivery and product roadmap boards",
 };
 
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('theme-preference');var d=t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');}catch(e){}})();`;
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('theme-preference');var d=t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');if(localStorage.getItem('density')==='compact')document.documentElement.setAttribute('data-density','compact');}catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

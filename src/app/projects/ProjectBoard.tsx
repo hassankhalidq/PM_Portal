@@ -1,6 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  DENSITY_EVENT,
+  KPIS_EVENT,
+  getDensity,
+  getShowKpis,
+  setDensity,
+  setShowKpis,
+  type Density,
+} from "@/lib/uiPrefs";
 import {
   addComment,
   addDependency,
@@ -62,6 +72,8 @@ export type NodeT = {
   startDate: string | null;
   endDate: string | null;
   description: string;
+  blockReason: string;
+  request: string;
   parentId: string | null;
   comments: CommentT[];
   attachments: AttachmentT[];
@@ -90,10 +102,10 @@ const STATUS_META: Record<NodeT["status"], { label: string; bg: string; text: st
   DONE: { label: "Done", bg: "bg-success", text: "text-black" },
 };
 
-const PRIORITY_META: Record<NodeT["priority"], { label: string; bg: string; text: string }> = {
-  LOW: { label: "Low", bg: "bg-info", text: "text-white" },
-  MEDIUM: { label: "Medium", bg: "bg-warning", text: "text-black" },
-  HIGH: { label: "High", bg: "bg-danger", text: "text-white" },
+const PRIORITY_META: Record<NodeT["priority"], { label: string; bg: string; text: string; labelColor: string }> = {
+  LOW: { label: "Low", bg: "bg-info", text: "text-white", labelColor: "text-info" },
+  MEDIUM: { label: "Medium", bg: "bg-warning", text: "text-black", labelColor: "text-warning" },
+  HIGH: { label: "High", bg: "bg-danger", text: "text-white", labelColor: "text-danger" },
 };
 
 const STATUS_ORDER: Record<NodeT["status"], number> = { NOT_STARTED: 0, IN_PROGRESS: 1, BLOCKED: 2, DONE: 3 };
@@ -250,12 +262,75 @@ export default function ProjectBoard({
 }) {
   const [view, setView] = useState<"table" | "kanban" | "timeline" | "log" | "weekly">("table");
   const [filters, setFilters] = useState({ owner: "", status: "", priority: "" });
+  const [datesAtRiskOnly, setDatesAtRiskOnly] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creatingRoot, setCreatingRoot] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
   const [colWidths, setColWidths] = useState<Record<ColumnKey, number>>(DEFAULT_WIDTHS);
   const [timelinePxPerDay, setTimelinePxPerDay] = useState(6);
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [, startBulk] = useTransition();
+  const searchParams = useSearchParams();
+  const savedView = searchParams.get("saved");
+
+  const [showKpis, setShowKpisState] = useState(true);
+  const [density, setDensityState] = useState<Density>("comfortable");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+  useClosePopover(paletteOpen, () => setPaletteOpen(false), paletteRef);
+  useClosePopover(notifOpen, () => setNotifOpen(false), notifRef);
+
+  useEffect(() => {
+    setShowKpisState(getShowKpis());
+    setDensityState(getDensity());
+    const onKpis = (e: Event) => setShowKpisState((e as CustomEvent<boolean>).detail);
+    const onDensity = (e: Event) => setDensityState((e as CustomEvent<Density>).detail);
+    window.addEventListener(KPIS_EVENT, onKpis);
+    window.addEventListener(DENSITY_EVENT, onDensity);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener(KPIS_EVENT, onKpis);
+      window.removeEventListener(DENSITY_EVENT, onDensity);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  const toggleDensity = () => {
+    const next: Density = density === "compact" ? "comfortable" : "compact";
+    setDensityState(next);
+    setDensity(next);
+  };
+  const toggleKpis = () => {
+    const next = !showKpis;
+    setShowKpisState(next);
+    setShowKpis(next);
+  };
+
+  const toggleRowSelect = (id: string) =>
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const bulkUpdate = (data: Parameters<typeof updateNode>[1]) => {
+    const ids = Array.from(selectedRows);
+    setSelectedRows(new Set());
+    startBulk(async () => {
+      await Promise.all(ids.map((id) => updateNode(id, data)));
+    });
+  };
 
   const cycleSort = (key: SortKey) =>
     setSort((prev) => {
@@ -265,11 +340,11 @@ export default function ProjectBoard({
     });
 
   const gridTemplate = useMemo(
-    () => COLUMN_ORDER.map((k) => `${colWidths[k]}px`).join(" ") + " 40px",
+    () => "28px " + COLUMN_ORDER.map((k) => `${colWidths[k]}px`).join(" ") + " 40px",
     [colWidths]
   );
   const tableMinWidth = useMemo(
-    () => COLUMN_ORDER.reduce((sum, k) => sum + colWidths[k], 0) + 40,
+    () => COLUMN_ORDER.reduce((sum, k) => sum + colWidths[k], 0) + 68,
     [colWidths]
   );
 
@@ -391,12 +466,29 @@ export default function ProjectBoard({
     });
   };
 
-  const filterActive = !!(filters.owner || filters.status || filters.priority);
+  const filterActive = !!(filters.owner || filters.status || filters.priority || savedView || datesAtRiskOnly);
+
+  const matchesSaved = (n: NodeT) => {
+    switch (savedView) {
+      case "my-week":
+        return n.status === "IN_PROGRESS";
+      case "blocked":
+        return n.status === "BLOCKED";
+      case "no-dates":
+        return !n.startDate && !n.endDate;
+      case "high-priority":
+        return n.priority === "HIGH";
+      default:
+        return true;
+    }
+  };
 
   const matches = (n: NodeT) =>
     (!filters.owner || n.owner === filters.owner) &&
     (!filters.status || n.status === filters.status) &&
-    (!filters.priority || n.priority === filters.priority);
+    (!filters.priority || n.priority === filters.priority) &&
+    (!datesAtRiskOnly || (!!n.startDate && new Date(n.startDate) < today && n.status !== "DONE")) &&
+    matchesSaved(n);
 
   // A node is visible if it matches, or any descendant matches (ancestors stay for context).
   const visible = useMemo(() => {
@@ -412,7 +504,7 @@ export default function ProjectBoard({
     for (const root of byParent.get(null) ?? []) walk(root.id);
     return set;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [byId, byParent, filters]);
+  }, [byId, byParent, filters, savedView, datesAtRiskOnly]);
 
   const toggle = (id: string) =>
     setCollapsed((prev) => {
@@ -422,6 +514,13 @@ export default function ProjectBoard({
       return next;
     });
 
+  const selectableIds = useMemo(
+    () => nodes.filter((n) => n.parentId !== null && visible.has(n.id)).map((n) => n.id),
+    [nodes, visible]
+  );
+  const allRowsSelected = selectedRows.size > 0 && selectableIds.every((id) => selectedRows.has(id));
+  const toggleSelectAll = () => setSelectedRows(allRowsSelected ? new Set() : new Set(selectableIds));
+
   const selected = selectedId ? byId.get(selectedId) ?? null : null;
   const naturalRoots = (orderedChildren.get(null) ?? []).filter((r) => visible.has(r.id));
   const roots =
@@ -429,6 +528,107 @@ export default function ProjectBoard({
       ? (groupOrder.map((id) => byId.get(id)).filter(Boolean) as NodeT[]).filter((r) => visible.has(r.id))
       : naturalRoots;
   const dragReorderEnabled = sort === null && !filterActive;
+
+  const kpis = useMemo(() => {
+    let onTrack = 0;
+    let blocked = 0;
+    let shipped = 0;
+    let atRisk = 0;
+    for (const n of nodes) {
+      if (n.status === "IN_PROGRESS") onTrack++;
+      if (n.status === "BLOCKED") blocked++;
+      if (n.status === "DONE") shipped++;
+      if (n.startDate && new Date(n.startDate) < today && n.status !== "DONE") atRisk++;
+    }
+    return { onTrack, blocked, shipped, atRisk };
+  }, [nodes, today]);
+
+  const clickKpi = (kind: "onTrack" | "blocked" | "shipped" | "atRisk") => {
+    setView("table");
+    if (kind === "atRisk") {
+      setDatesAtRiskOnly(true);
+      setFilters({ owner: "", status: "", priority: "" });
+    } else {
+      setDatesAtRiskOnly(false);
+      setFilters({
+        owner: "",
+        status: kind === "onTrack" ? "IN_PROGRESS" : kind === "blocked" ? "BLOCKED" : "DONE",
+        priority: "",
+      });
+    }
+  };
+
+  const nodesWithChildren = useMemo(
+    () => nodes.filter((n) => (byParent.get(n.id)?.length ?? 0) > 0).map((n) => n.id),
+    [nodes, byParent]
+  );
+  const anyCollapsed = collapsed.size > 0;
+  const toggleExpandAll = () => setCollapsed(anyCollapsed ? new Set() : new Set(nodesWithChildren));
+
+  type PaletteCommand = { id: string; label: string; hint?: string; run: () => void };
+  const paletteCommands: PaletteCommand[] = [
+    { id: "go-table", label: "Go to Table", hint: "1", run: () => setView("table") },
+    { id: "go-kanban", label: "Go to Kanban", hint: "2", run: () => setView("kanban") },
+    { id: "go-timeline", label: "Go to Timeline", hint: "3", run: () => setView("timeline") },
+    { id: "go-log", label: "Go to Log", hint: "4", run: () => setView("log") },
+    { id: "go-weekly", label: "Go to Weekly", hint: "5", run: () => setView("weekly") },
+    {
+      id: "dark-mode",
+      label: "Toggle dark mode",
+      hint: "D",
+      run: () => {
+        const el = document.documentElement;
+        const next = !el.classList.contains("dark");
+        el.classList.toggle("dark", next);
+        localStorage.setItem("theme-preference", next ? "dark" : "light");
+      },
+    },
+    {
+      id: "show-blocked",
+      label: "Show blocked items",
+      run: () => {
+        setView("table");
+        setDatesAtRiskOnly(false);
+        setFilters({ owner: "", status: "BLOCKED", priority: "" });
+      },
+    },
+  ];
+  const paletteQueryLower = paletteQuery.trim().toLowerCase();
+  const paletteItemResults = paletteQueryLower
+    ? nodes.filter((n) => n.name.toLowerCase().includes(paletteQueryLower)).slice(0, 6)
+    : [];
+  const paletteCommandResults = paletteCommands.filter((c) => c.label.toLowerCase().includes(paletteQueryLower));
+
+  const runPaletteCommand = (cmd: PaletteCommand) => {
+    cmd.run();
+    setPaletteOpen(false);
+    setPaletteQuery("");
+  };
+  const pickPaletteItem = (id: string) => {
+    setSelectedId(id);
+    setPaletteOpen(false);
+    setPaletteQuery("");
+  };
+
+  const notifications = useMemo(() => {
+    const fromLogs = logEntries.slice(0, 20).map((l) => ({
+      id: `log-${l.id}`,
+      text: `${l.nodeName} — ${l.activity}`,
+      when: l.date,
+      nodeId: l.nodeId,
+    }));
+    const fromComments = nodes.flatMap((n) =>
+      n.comments.map((c) => ({
+        id: `comment-${c.id}`,
+        text: `${n.name} — ${c.body}`,
+        when: c.createdAt,
+        nodeId: n.id,
+      }))
+    );
+    return [...fromLogs, ...fromComments]
+      .sort((a, b) => new Date(b.when).getTime() - new Date(a.when).getTime())
+      .slice(0, 8);
+  }, [logEntries, nodes]);
 
   return (
     <div className="flex h-screen flex-col">
@@ -464,55 +664,190 @@ export default function ProjectBoard({
             />
           </label>
         )}
-        <div className="flex rounded-lg border border-border p-0.5">
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          className="btn-ghost text-xs text-text-muted"
+          aria-label="Open command palette"
+        >
+          🔍 Search
+          <span className="figure ml-1 rounded border border-border px-1 text-[10px] text-text-muted">⌘K</span>
+        </button>
+        <div className="relative" ref={notifRef}>
           <button
-            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-              view === "table" ? "bg-accent/10 text-accent" : "text-text-muted"
-            }`}
-            onClick={() => setView("table")}
+            type="button"
+            onClick={() => setNotifOpen((o) => !o)}
+            className="btn-ghost relative h-9 w-9 justify-center p-0 text-text-muted"
+            aria-label="Notifications"
           >
-            Table
+            🔔
+            {notifications.length > 0 && (
+              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-danger" />
+            )}
           </button>
-          <button
-            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-              view === "kanban" ? "bg-accent/10 text-accent" : "text-text-muted"
-            }`}
-            onClick={() => setView("kanban")}
-          >
-            Kanban
-          </button>
-          <button
-            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-              view === "timeline" ? "bg-accent/10 text-accent" : "text-text-muted"
-            }`}
-            onClick={() => setView("timeline")}
-          >
-            Timeline
-          </button>
-          <button
-            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-              view === "log" ? "bg-accent/10 text-accent" : "text-text-muted"
-            }`}
-            onClick={() => setView("log")}
-          >
-            Log
-          </button>
-          <button
-            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-              view === "weekly" ? "bg-accent/10 text-accent" : "text-text-muted"
-            }`}
-            onClick={() => setView("weekly")}
-          >
-            Weekly
-          </button>
+          {notifOpen && (
+            <div className="animate-pop-in absolute right-0 top-full z-30 mt-1 max-h-80 w-80 overflow-y-auto rounded-lg border border-border bg-surface p-1.5 shadow-lg">
+              <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                What changed
+              </p>
+              {notifications.length === 0 && (
+                <p className="px-2 py-2 text-sm text-text-muted">Nothing recent.</p>
+              )}
+              {notifications.map((n) => (
+                <button
+                  key={n.id}
+                  onClick={() => {
+                    setSelectedId(n.nodeId);
+                    setNotifOpen(false);
+                  }}
+                  className="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg"
+                  title={n.text}
+                >
+                  {n.text}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
           New project
         </button>
       </header>
 
+      <div className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-6 py-2">
+        <div className="mr-auto flex items-center gap-1">
+          {(
+            [
+              ["table", "Table"],
+              ["kanban", "Kanban"],
+              ["timeline", "Timeline"],
+              ["log", "Log"],
+              ["weekly", "Weekly"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              className={`px-2.5 py-1.5 text-xs font-medium ${
+                view === key ? "font-semibold text-accent" : "text-text-muted hover:text-text"
+              }`}
+              style={view === key ? { boxShadow: "inset 0 -2px 0 rgb(var(--accent-rgb))" } : undefined}
+              onClick={() => setView(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="btn-ghost text-xs text-text-muted" onClick={toggleExpandAll}>
+          {anyCollapsed ? "Expand all" : "Collapse all"}
+        </button>
+        <button type="button" className="btn-ghost text-xs text-text-muted" onClick={toggleDensity}>
+          {density === "compact" ? "Comfortable" : "Compact"}
+        </button>
+        <button type="button" className="btn-ghost text-xs text-text-muted" onClick={toggleKpis}>
+          {showKpis ? "Hide KPIs" : "Show KPIs"}
+        </button>
+      </div>
+
+      {showKpis && (
+        <div className="grid grid-cols-4 gap-3 border-b border-border bg-surface px-6 py-3">
+          <button
+            type="button"
+            onClick={() => clickKpi("onTrack")}
+            className="focus-ring rounded-lg border border-border bg-bg px-3 py-2 text-left hover:border-accent/40"
+          >
+            <p className="figure text-lg font-semibold text-info">{kpis.onTrack}</p>
+            <p className="text-[11px] uppercase tracking-wider text-text-muted">On track</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => clickKpi("blocked")}
+            className="focus-ring rounded-lg border border-border bg-bg px-3 py-2 text-left hover:border-accent/40"
+          >
+            <p className="figure text-lg font-semibold text-danger">{kpis.blocked}</p>
+            <p className="text-[11px] uppercase tracking-wider text-text-muted">Blocked</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => clickKpi("shipped")}
+            className="focus-ring rounded-lg border border-border bg-bg px-3 py-2 text-left hover:border-accent/40"
+          >
+            <p className="figure text-lg font-semibold text-success">{kpis.shipped}</p>
+            <p className="text-[11px] uppercase tracking-wider text-text-muted">Shipped</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => clickKpi("atRisk")}
+            className="focus-ring rounded-lg border border-border bg-bg px-3 py-2 text-left hover:border-accent/40"
+          >
+            <p className="figure text-lg font-semibold text-warning">{kpis.atRisk}</p>
+            <p className="text-[11px] uppercase tracking-wider text-text-muted">Dates at risk</p>
+          </button>
+        </div>
+      )}
+
+      {paletteOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-24 animate-overlay-in">
+          <div
+            ref={paletteRef}
+            className="animate-palette-in w-full max-w-lg rounded-xl border border-border bg-surface shadow-lg"
+          >
+            <input
+              autoFocus
+              className="w-full border-b border-border bg-transparent px-4 py-3 text-sm outline-none"
+              placeholder="Search items or run a command…"
+              value={paletteQuery}
+              onChange={(e) => setPaletteQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (paletteItemResults[0]) pickPaletteItem(paletteItemResults[0].id);
+                  else if (paletteCommandResults[0]) runPaletteCommand(paletteCommandResults[0]);
+                }
+              }}
+            />
+            <div className="max-h-96 overflow-y-auto p-1.5">
+              {paletteItemResults.length > 0 && (
+                <>
+                  <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                    Items
+                  </p>
+                  {paletteItemResults.map((n) => (
+                    <button
+                      key={n.id}
+                      onClick={() => pickPaletteItem(n.id)}
+                      className="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+                    >
+                      {n.name}
+                    </button>
+                  ))}
+                </>
+              )}
+              <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                Commands
+              </p>
+              {paletteCommandResults.length === 0 && (
+                <p className="px-2 py-2 text-sm text-text-muted">No matching commands.</p>
+              )}
+              {paletteCommandResults.map((cmd) => (
+                <button
+                  key={cmd.id}
+                  onClick={() => runPaletteCommand(cmd)}
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+                >
+                  <span>{cmd.label}</span>
+                  {cmd.hint && (
+                    <span className="figure rounded border border-border px-1 text-[10px] text-text-muted">
+                      {cmd.hint}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {view === "table" ? (
-        <div className="flex-1 overflow-x-auto overflow-y-auto px-6 py-5">
+        <div className="animate-view-in relative flex-1 overflow-x-auto overflow-y-auto px-6 py-5">
           <div style={{ minWidth: tableMinWidth }}>
             {creatingRoot && (
               <InlineCreate
@@ -534,6 +869,17 @@ export default function ProjectBoard({
                   className="sticky top-0 z-10 grid divide-x divide-border items-center rounded-lg border border-border bg-bg text-[11px] font-semibold uppercase tracking-wider text-text-muted"
                   style={{ gridTemplateColumns: gridTemplate }}
                 >
+                  <div className="flex items-center justify-center px-1">
+                    {selectableIds.length > 0 && (
+                      <input
+                        type="checkbox"
+                        aria-label="Select all rows"
+                        checked={allRowsSelected}
+                        onChange={toggleSelectAll}
+                        className="h-3.5 w-3.5 accent-[var(--accent-hover)]"
+                      />
+                    )}
+                  </div>
                   <SortableHeaderCell label="Item" sortKey="name" sort={sort} onSort={cycleSort} columnKey="item" colWidths={colWidths} setColWidths={setColWidths} />
                   <SortableHeaderCell label="Owner" sortKey="owner" sort={sort} onSort={cycleSort} columnKey="owner" colWidths={colWidths} setColWidths={setColWidths} />
                   <SortableHeaderCell label="Status" sortKey="status" sort={sort} onSort={cycleSort} columnKey="status" colWidths={colWidths} setColWidths={setColWidths} align="center" />
@@ -584,6 +930,8 @@ export default function ProjectBoard({
                         onSelect={setSelectedId}
                         selectedId={selectedId}
                         gridTemplate={gridTemplate}
+                        selectedRows={selectedRows}
+                        onToggleSelect={toggleRowSelect}
                         dragEnabled={dragReorderEnabled}
                         onGripPointerDown={(e) => beginGroupDrag(e, root.id)}
                         onGripPointerMove={onGroupDragMove}
@@ -617,6 +965,25 @@ export default function ProjectBoard({
               </div>
             )}
           </div>
+          {selectedRows.size > 0 && (
+            <div className="animate-pop-in fixed inset-x-0 bottom-6 z-30 flex justify-center">
+              <div className="flex items-center gap-1 rounded-xl border border-border bg-surface px-2 py-1.5 shadow-lg">
+                <span className="figure px-2 text-xs text-text-muted">{selectedRows.size} selected</span>
+                <button className="btn-ghost text-xs" onClick={() => bulkUpdate({ status: "DONE" })}>
+                  Mark done
+                </button>
+                <button className="btn-ghost text-xs" onClick={() => bulkUpdate({ priority: "HIGH" })}>
+                  Set high
+                </button>
+                <button className="btn-ghost text-xs text-danger" onClick={() => bulkUpdate({ status: "BLOCKED" })}>
+                  Block
+                </button>
+                <button className="btn-ghost text-xs" onClick={() => setSelectedRows(new Set())}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ) : view === "kanban" ? (
         <KanbanBoard
@@ -630,13 +997,17 @@ export default function ProjectBoard({
           filterActive={filterActive}
         />
       ) : view === "timeline" ? (
-        <TimelineView
-          nodes={nodes}
+        <TimelineBoard
+          nodes={nodes.filter((n) => visible.has(n.id))}
           byParent={orderedChildren}
-          visible={visible}
+          byId={byId}
+          today={today}
           dependencies={dependencies}
           pxPerDay={timelinePxPerDay}
           onSelect={setSelectedId}
+          collapsed={collapsed}
+          toggle={toggle}
+          filterActive={filterActive}
         />
       ) : view === "log" ? (
         <LogView nodes={nodes} logEntries={logEntries} />
@@ -759,74 +1130,180 @@ function FiltersPopover({
   );
 }
 
-function StatusSelect({ node }: { node: NodeT }) {
+// Shared click-outside/Escape-to-close behavior for the small popover menus
+// below — same pattern already used by EntitySwitcher elsewhere in this app.
+function useClosePopover(open: boolean, onClose: () => void, ref: React.RefObject<HTMLElement>) {
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, onClose, ref]);
+}
+
+// Dot + plain-text status control — replaces the former native `<select>`
+// pill. Same optimistic-update-with-rollback behavior, just a custom
+// absolute-positioned menu of colored-dot options instead of a native
+// dropdown, matching the redesign's "no colored pills" language.
+function StatusChip({ node }: { node: NodeT }) {
   const [pending, start] = useTransition();
-  // Optimistic local value: the select must reflect the pick instantly, since
-  // the server round-trip + revalidation can take a few seconds — without
-  // this the control visibly snaps back to the old value before catching up.
   const [value, setValue] = useState(node.status);
   useEffect(() => setValue(node.status), [node.status]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useClosePopover(open, () => setOpen(false), ref);
+
+  const pick = (next: NodeT["status"]) => {
+    setOpen(false);
+    const prev = value;
+    setValue(next);
+    start(async () => {
+      try {
+        await updateNode(node.id, { status: next });
+      } catch {
+        setValue(prev);
+      }
+    });
+  };
 
   return (
-    <select
-      aria-label="Status"
-      value={value}
-      disabled={pending}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => {
-        const next = e.target.value as NodeT["status"];
-        const prev = value;
-        setValue(next);
-        start(async () => {
-          try {
-            await updateNode(node.id, { status: next });
-          } catch {
-            setValue(prev);
-          }
-        });
-      }}
-      className={`w-full cursor-pointer appearance-none rounded-full border-none px-2 py-1 text-center text-[11px] font-semibold ${STATUS_META[value].bg} ${STATUS_META[value].text} hover:[appearance:auto] focus:[appearance:auto] focus:outline-none focus:ring-1 focus:ring-accent`}
-    >
-      {Object.entries(STATUS_META).map(([k, v]) => (
-        <option key={k} value={k}>
-          {v.label}
-        </option>
-      ))}
-    </select>
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        aria-label="Status"
+        disabled={pending}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="focus-ring flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-text-muted hover:bg-surface3"
+      >
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_META[value].bg}`} />
+        <span className="truncate">{STATUS_META[value].label}</span>
+      </button>
+      {open && (
+        <div
+          className="animate-pop-in absolute left-0 top-full z-20 mt-1 w-36 rounded-lg border border-border bg-surface p-1 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(Object.keys(STATUS_META) as NodeT["status"][]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => pick(k)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-text-muted hover:bg-surface2"
+            >
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_META[k].bg}`} />
+              {STATUS_META[k].label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-function PrioritySelect({ node }: { node: NodeT }) {
+// Small mono-uppercase colored label — priority's equivalent of StatusChip
+// (no dot, matching the redesign's "priority is a small mono label" language).
+function PriorityChip({ node }: { node: NodeT }) {
   const [pending, start] = useTransition();
   const [value, setValue] = useState(node.priority);
   useEffect(() => setValue(node.priority), [node.priority]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useClosePopover(open, () => setOpen(false), ref);
+
+  const pick = (next: NodeT["priority"]) => {
+    setOpen(false);
+    const prev = value;
+    setValue(next);
+    start(async () => {
+      try {
+        await updateNode(node.id, { priority: next });
+      } catch {
+        setValue(prev);
+      }
+    });
+  };
 
   return (
-    <select
-      aria-label="Priority"
-      value={value}
-      disabled={pending}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => {
-        const next = e.target.value as NodeT["priority"];
-        const prev = value;
-        setValue(next);
-        start(async () => {
-          try {
-            await updateNode(node.id, { priority: next });
-          } catch {
-            setValue(prev);
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        aria-label="Priority"
+        disabled={pending}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className={`focus-ring rounded-md px-1.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider hover:bg-surface3 ${PRIORITY_META[value].labelColor}`}
+      >
+        {PRIORITY_META[value].label}
+      </button>
+      {open && (
+        <div
+          className="animate-pop-in absolute left-0 top-full z-20 mt-1 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(Object.keys(PRIORITY_META) as NodeT["priority"][]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => pick(k)}
+              className={`block w-full rounded-md px-2 py-1.5 text-left font-mono text-[10px] font-semibold uppercase tracking-wider hover:bg-surface2 ${PRIORITY_META[k].labelColor}`}
+            >
+              {PRIORITY_META[k].label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmDeleteButton({
+  label = "Delete",
+  onConfirm,
+  disabled,
+}: {
+  label?: string;
+  onConfirm: () => void;
+  disabled?: boolean;
+}) {
+  const [armed, setArmed] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useClosePopover(armed, () => setArmed(false), ref);
+  return (
+    <div ref={ref} className="inline-block">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (!armed) {
+            setArmed(true);
+            return;
           }
-        });
-      }}
-      className={`w-full cursor-pointer appearance-none rounded-full border-none px-2 py-1 text-center text-[11px] font-semibold ${PRIORITY_META[value].bg} ${PRIORITY_META[value].text} hover:[appearance:auto] focus:[appearance:auto] focus:outline-none focus:ring-1 focus:ring-accent`}
-    >
-      {Object.entries(PRIORITY_META).map(([k, v]) => (
-        <option key={k} value={k}>
-          {v.label}
-        </option>
-      ))}
-    </select>
+          setArmed(false);
+          onConfirm();
+        }}
+        className={`btn ${
+          armed
+            ? "border border-danger bg-danger text-white hover:bg-danger"
+            : "btn-ghost text-danger"
+        }`}
+      >
+        {armed ? "Confirm delete" : label}
+      </button>
+    </div>
   );
 }
 
@@ -842,6 +1319,8 @@ function GroupHeader({
   onSelect,
   selectedId,
   gridTemplate,
+  selectedRows,
+  onToggleSelect,
   dragEnabled,
   onGripPointerDown,
   onGripPointerMove,
@@ -859,6 +1338,8 @@ function GroupHeader({
   onSelect: (id: string) => void;
   selectedId: string | null;
   gridTemplate: string;
+  selectedRows: Set<string>;
+  onToggleSelect: (id: string) => void;
   dragEnabled?: boolean;
   onGripPointerDown?: (e: React.PointerEvent) => void;
   onGripPointerMove?: (e: React.PointerEvent) => void;
@@ -878,9 +1359,10 @@ function GroupHeader({
   return (
     <div>
       <div
-        className="grid min-h-[44px] items-center border-l-[3px] border-l-accent bg-accent/10"
-        style={{ gridTemplateColumns: gridTemplate }}
+        className="grid items-center border-l-[3px] border-l-accent bg-accent/10"
+        style={{ gridTemplateColumns: gridTemplate, minHeight: "calc(20px + var(--rowpad) * 2)" }}
       >
+        <span />
         <div className="flex min-w-0 items-center gap-2 px-3">
           {dragEnabled && (
             <button
@@ -936,10 +1418,10 @@ function GroupHeader({
           )}
         </div>
         <div className="flex items-center px-2">
-          <StatusSelect node={node} />
+          <StatusChip node={node} />
         </div>
         <div className="flex items-center px-2">
-          <PrioritySelect node={node} />
+          <PriorityChip node={node} />
         </div>
         <div className="flex items-center gap-2 px-3">
           <ProgressBar value={node.progress} className="w-16" />
@@ -1001,6 +1483,8 @@ function GroupHeader({
               onSelect={onSelect}
               selectedId={selectedId}
               gridTemplate={gridTemplate}
+              selectedRows={selectedRows}
+              onToggleSelect={onToggleSelect}
             />
           ))}
         </div>
@@ -1019,6 +1503,8 @@ function Row({
   onSelect,
   selectedId,
   gridTemplate,
+  selectedRows,
+  onToggleSelect,
 }: {
   node: NodeT;
   depth: number;
@@ -1029,6 +1515,8 @@ function Row({
   onSelect: (id: string) => void;
   selectedId: string | null;
   gridTemplate: string;
+  selectedRows: Set<string>;
+  onToggleSelect: (id: string) => void;
 }) {
   const kids = (byParent.get(node.id) ?? []).filter((k) => visible.has(k.id));
   const isCollapsed = collapsed.has(node.id);
@@ -1037,11 +1525,21 @@ function Row({
   return (
     <div>
       <div
-        className={`group grid divide-x divide-border min-h-[44px] border-b border-border/70 last:border-b-0 ${
+        className={`group grid divide-x divide-border border-b border-border/70 last:border-b-0 ${
           selectedId === node.id ? "bg-accent/10" : "hover:bg-bg"
         }`}
-        style={{ gridTemplateColumns: gridTemplate }}
+        style={{ gridTemplateColumns: gridTemplate, minHeight: "calc(20px + var(--rowpad) * 2)" }}
       >
+        <div className="flex items-center justify-center px-1">
+          <input
+            type="checkbox"
+            aria-label={`Select ${node.name}`}
+            checked={selectedRows.has(node.id)}
+            onChange={() => onToggleSelect(node.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="h-3.5 w-3.5 accent-[var(--accent-hover)]"
+          />
+        </div>
         <div className="flex min-w-0 items-center gap-2 px-3">
           <button
             aria-label={isCollapsed ? "Expand" : "Collapse"}
@@ -1079,10 +1577,10 @@ function Row({
           )}
         </div>
         <div className="flex items-center px-2">
-          <StatusSelect node={node} />
+          <StatusChip node={node} />
         </div>
         <div className="flex items-center px-2">
-          <PrioritySelect node={node} />
+          <PriorityChip node={node} />
         </div>
         <div className="flex items-center gap-2 px-3">
           <ProgressBar value={node.progress} className="w-16" />
@@ -1148,6 +1646,8 @@ function Row({
               onSelect={onSelect}
               selectedId={selectedId}
               gridTemplate={gridTemplate}
+              selectedRows={selectedRows}
+              onToggleSelect={onToggleSelect}
             />
           ))}
         </div>
@@ -1218,13 +1718,13 @@ function SidePanel({
   const [form, setForm] = useState({
     name: node.name,
     owner: node.owner,
-    status: node.status,
-    priority: node.priority,
     progress: node.progress,
     link: node.link,
     startDate: node.startDate ?? "",
     endDate: node.endDate ?? "",
     description: node.description,
+    blockReason: node.blockReason,
+    request: node.request,
   });
   const [comment, setComment] = useState("");
   const [pending, start] = useTransition();
@@ -1236,13 +1736,13 @@ function SidePanel({
       await updateNode(node.id, {
         name: form.name,
         owner: form.owner,
-        status: form.status,
-        priority: form.priority,
         progress: form.progress,
         link: form.link,
         startDate: form.startDate || null,
         endDate: form.endDate || null,
         description: form.description,
+        blockReason: form.blockReason,
+        request: form.request,
       });
     });
 
@@ -1263,7 +1763,6 @@ function SidePanel({
   const removeAttachment = (id: string) => start(() => deleteAttachment(id));
 
   const remove = () => {
-    if (!confirm("Delete this item and everything nested under it?")) return;
     start(async () => {
       await deleteNode(node.id);
       onDeleted();
@@ -1303,7 +1802,9 @@ function SidePanel({
   };
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-lg">
+    <>
+      <div className="animate-overlay-in fixed inset-0 z-30 bg-black/40" onClick={onClose} />
+      <aside className="animate-drawer-in fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-lg">
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <h2 className="text-base font-semibold">Item details</h2>
         <button aria-label="Close panel" className="btn-ghost h-8 w-8 justify-center p-0" onClick={onClose}>
@@ -1314,6 +1815,17 @@ function SidePanel({
         <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Name</label>
           <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">
+            Request reference
+          </label>
+          <input
+            className="field figure"
+            placeholder="e.g. REQ-1042"
+            value={form.request}
+            onChange={(e) => setForm({ ...form, request: e.target.value })}
+          />
         </div>
         <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Owner</label>
@@ -1327,33 +1839,26 @@ function SidePanel({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Status</label>
-            <select
-              className="field"
-              value={form.status}
-              onChange={(e) => setForm({ ...form, status: e.target.value as NodeT["status"] })}
-            >
-              {Object.entries(STATUS_META).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
+            <StatusChip node={node} />
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Priority</label>
-            <select
-              className="field"
-              value={form.priority}
-              onChange={(e) => setForm({ ...form, priority: e.target.value as NodeT["priority"] })}
-            >
-              {Object.entries(PRIORITY_META).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
+            <PriorityChip node={node} />
           </div>
         </div>
+        {node.status === "BLOCKED" && (
+          <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-danger">
+              Blocked reason
+            </label>
+            <textarea
+              className="field min-h-16 border-danger/30 bg-surface"
+              placeholder="What's blocking this item?"
+              value={form.blockReason}
+              onChange={(e) => setForm({ ...form, blockReason: e.target.value })}
+            />
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Start</label>
@@ -1410,13 +1915,11 @@ function SidePanel({
           <button className="btn-primary" onClick={save} disabled={pending}>
             {pending ? "Saving..." : "Save changes"}
           </button>
-          <button className="btn-ghost text-danger" onClick={remove} disabled={pending}>
-            Delete
-          </button>
+          <ConfirmDeleteButton onConfirm={remove} disabled={pending} />
         </div>
 
         <div className="border-t border-border pt-4">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
+          <h3 className="mb-2 font-mono text-xs font-semibold uppercase tracking-wider text-text-muted">
             Depends on (<span className="figure">{predecessors.length}</span>)
           </h3>
           {depError && <p className="mb-2 text-sm text-danger">{depError}</p>}
@@ -1473,7 +1976,7 @@ function SidePanel({
 
         <div className="border-t border-border pt-4">
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+            <h3 className="font-mono text-xs font-semibold uppercase tracking-wider text-text-muted">
               Attachments (<span className="figure">{node.attachments.length}</span>)
             </h3>
             <button className="text-xs font-medium text-accent hover:underline" onClick={pickFile} disabled={pending}>
@@ -1517,7 +2020,7 @@ function SidePanel({
         </div>
 
         <div className="border-t border-border pt-4">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
+          <h3 className="mb-2 font-mono text-xs font-semibold uppercase tracking-wider text-text-muted">
             Comments (<span className="figure">{node.comments.length}</span>)
           </h3>
           <div className="space-y-3">
@@ -1547,7 +2050,8 @@ function SidePanel({
           </div>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 
@@ -1610,7 +2114,7 @@ function KanbanBoard({
   }
 
   return (
-    <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+    <div className="animate-view-in flex-1 space-y-4 overflow-y-auto px-6 py-5">
       {roots.map((root) => (
         <KanbanProjectSection
           key={root.id}
@@ -1624,6 +2128,72 @@ function KanbanBoard({
           onSelect={onSelect}
         />
       ))}
+    </div>
+  );
+}
+
+// Shared summary header for one project's collapsible section — reused by
+// both Kanban and Timeline so a project reads identically (name, priority,
+// progress, date extent, collapse caret) no matter which view it's in.
+function ProjectSectionHeader({
+  root,
+  count,
+  extent,
+  isCollapsed,
+  toggle,
+  onSelect,
+}: {
+  root: NodeT;
+  count: number;
+  extent: { start: Date | null; end: Date | null };
+  isCollapsed: boolean;
+  toggle: (id: string) => void;
+  onSelect: (id: string) => void;
+}) {
+  const extentStr = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-border bg-accent/10 px-4 py-3">
+      <button
+        aria-label={isCollapsed ? "Expand" : "Collapse"}
+        onClick={() => toggle(root.id)}
+        className={`focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded text-accent transition-transform ${
+          isCollapsed ? "" : "rotate-90"
+        }`}
+      >
+        ▸
+      </button>
+      <div className="min-w-0 flex-1">
+        <button
+          onClick={() => onSelect(root.id)}
+          className="focus-ring block truncate rounded text-left text-[15px] font-semibold"
+        >
+          {root.name}
+        </button>
+        {root.description && (
+          <p className="truncate text-xs text-text-muted" title={root.description}>
+            {root.description}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <div className="w-32">
+          <StatusChip node={root} />
+        </div>
+        <div className="w-28">
+          <PriorityChip node={root} />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <ProgressBar value={root.progress} className="w-16" />
+          <span className="figure text-xs text-text-muted">{root.progress}%</span>
+        </div>
+        <span
+          className="figure text-xs text-text-muted"
+          title="Earliest start → latest end across this project and its breakdown items"
+        >
+          {fmtDate(extentStr(extent.start))} → {fmtDate(extentStr(extent.end))}
+        </span>
+        <span className="on-accent figure shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px]">{count}</span>
+      </div>
     </div>
   );
 }
@@ -1685,49 +2255,14 @@ function KanbanProjectSection({
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-      <div className="flex flex-wrap items-center gap-3 border-b border-border bg-accent/10 px-4 py-3">
-        <button
-          aria-label={isCollapsed ? "Expand" : "Collapse"}
-          onClick={() => toggle(root.id)}
-          className={`focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded text-accent transition-transform ${
-            isCollapsed ? "" : "rotate-90"
-          }`}
-        >
-          ▸
-        </button>
-        <div className="min-w-0 flex-1">
-          <button
-            onClick={() => onSelect(root.id)}
-            className="focus-ring block truncate rounded text-left text-[15px] font-semibold"
-          >
-            {root.name}
-          </button>
-          {root.description && (
-            <p className="truncate text-xs text-text-muted" title={root.description}>
-              {root.description}
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-3">
-          <div className="w-32">
-            <StatusSelect node={root} />
-          </div>
-          <div className="w-28">
-            <PrioritySelect node={root} />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <ProgressBar value={root.progress} className="w-16" />
-            <span className="figure text-xs text-text-muted">{root.progress}%</span>
-          </div>
-          <span
-            className="figure text-xs text-text-muted"
-            title="Earliest start → latest end across this project and its breakdown items"
-          >
-            {fmtDate(extentStr(extent.start))} → {fmtDate(extentStr(extent.end))}
-          </span>
-          <span className="on-accent figure shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px]">{items.length}</span>
-        </div>
-      </div>
+      <ProjectSectionHeader
+        root={root}
+        count={items.length}
+        extent={extent}
+        isCollapsed={isCollapsed}
+        toggle={toggle}
+        onSelect={onSelect}
+      />
       {!isCollapsed && (
         <div className="overflow-x-auto px-4 py-4">
           <div className="flex min-w-max gap-4">
@@ -1774,6 +2309,9 @@ function KanbanProjectSection({
                         <ProgressBar value={n.progress} />
                         <span className="figure text-[11px] text-text-muted">{n.progress}%</span>
                       </div>
+                      {n.status === "BLOCKED" && n.blockReason && (
+                        <p className="mt-2 rounded-md bg-danger/10 p-1.5 text-xs text-danger">{n.blockReason}</p>
+                      )}
                     </button>
                   ))}
                   {(byStatus.get(status)?.length ?? 0) === 0 && (
@@ -1842,48 +2380,128 @@ function dateExtent(
   return { start, end, openEnded };
 }
 
-function TimelineView({
+// Timeline has no natural nesting either, so it's grouped into one
+// collapsible section per top-level project — same shared `ProjectSectionHeader`
+// as Kanban, with each project's own scoped Gantt chart underneath instead
+// of one chart sharing a time axis across every project.
+function TimelineBoard({
   nodes,
   byParent,
-  visible,
+  byId,
+  today,
   dependencies,
   pxPerDay,
   onSelect,
+  collapsed,
+  toggle,
+  filterActive,
 }: {
   nodes: NodeT[];
   byParent: Map<string | null, NodeT[]>;
-  visible: Set<string>;
+  byId: Map<string, NodeT>;
+  today: Date;
   dependencies: DependencyT[];
   pxPerDay: number;
   onSelect: (id: string) => void;
+  collapsed: Set<string>;
+  toggle: (id: string) => void;
+  filterActive: boolean;
 }) {
-  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-  const today = useMemo(() => {
-    const d = new Date();
-    d.setUTCHours(0, 0, 0, 0);
-    return d;
-  }, []);
+  const rootOf = (id: string): string => {
+    let cur = byId.get(id);
+    while (cur?.parentId) {
+      const parent = byId.get(cur.parentId);
+      if (!parent) break;
+      cur = parent;
+    }
+    return cur?.id ?? id;
+  };
+
+  const byRoot = useMemo(() => {
+    const map = new Map<string, NodeT[]>();
+    for (const n of nodes) {
+      const r = rootOf(n.id);
+      if (r === n.id) continue;
+      const list = map.get(r) ?? [];
+      list.push(n);
+      map.set(r, list);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, byId]);
+
+  const roots = (byParent.get(null) ?? []).filter((r) => byRoot.has(r.id) || nodes.some((n) => n.id === r.id));
+
+  if (nodes.length === 0) {
+    return (
+      <div className="mt-16 text-center text-sm text-text-muted">
+        {filterActive ? "No items match the current filters." : "No projects yet."}
+      </div>
+    );
+  }
+
+  return (
+    <div className="animate-view-in flex-1 space-y-4 overflow-y-auto px-6 py-5">
+      {roots.map((root) => (
+        <TimelineProjectSection
+          key={root.id}
+          root={root}
+          items={byRoot.get(root.id) ?? []}
+          byParent={byParent}
+          byId={byId}
+          today={today}
+          dependencies={dependencies}
+          pxPerDay={pxPerDay}
+          onSelect={onSelect}
+          isCollapsed={collapsed.has(root.id)}
+          toggle={toggle}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TimelineProjectSection({
+  root,
+  items,
+  byParent,
+  byId,
+  today,
+  dependencies,
+  pxPerDay,
+  onSelect,
+  isCollapsed,
+  toggle,
+}: {
+  root: NodeT;
+  items: NodeT[];
+  byParent: Map<string | null, NodeT[]>;
+  byId: Map<string, NodeT>;
+  today: Date;
+  dependencies: DependencyT[];
+  pxPerDay: number;
+  onSelect: (id: string) => void;
+  isCollapsed: boolean;
+  toggle: (id: string) => void;
+}) {
+  const extent = dateExtent(root.id, byParent, byId, today);
 
   const rows = useMemo(() => {
     const out: GanttRow[] = [];
-    // `visible` already marks an ancestor as visible whenever any descendant
-    // matches the active filters (see the `visible` useMemo above in
-    // ProjectBoard), so pruning here the moment a node isn't in `visible` is
-    // safe — it means neither that node nor anything under it matches.
+    const itemIds = new Set(items.map((n) => n.id));
     const visit = (id: string, depth: number) => {
-      if (!visible.has(id)) return;
       const node = byId.get(id);
       if (!node) return;
-      const kids = byParent.get(id) ?? [];
-      const visibleKids = kids.filter((k) => visible.has(k.id));
-      const isGroup = visibleKids.length > 0;
+      const kids = (byParent.get(id) ?? []).filter((k) => itemIds.has(k.id));
+      const isGroup = kids.length > 0;
       const { start, end, openEnded } = dateExtent(id, byParent, byId, today);
       out.push({ id, name: node.name, depth, isGroup, status: isGroup ? null : node.status, progress: node.progress, start, end, openEnded });
-      for (const k of visibleKids) visit(k.id, depth + 1);
+      for (const k of kids) visit(k.id, depth + 1);
     };
-    for (const root of byParent.get(null) ?? []) visit(root.id, 0);
+    const directChildren = (byParent.get(root.id) ?? []).filter((k) => itemIds.has(k.id));
+    for (const c of directChildren) visit(c.id, 0);
     return out;
-  }, [byId, byParent, visible, today]);
+  }, [items, byId, byParent, today, root.id]);
 
   const { minDate, totalDays } = useMemo(() => {
     const dated = rows.filter((r) => r.start && r.end);
@@ -2010,17 +2628,26 @@ function TimelineView({
     });
   };
 
-  if (rows.length === 0) {
-    return <div className="mt-16 text-center text-sm text-text-muted">No projects yet.</div>;
-  }
-
   return (
-    <div className="flex-1 overflow-auto">
-      {depError && <p className="px-6 pt-3 text-sm text-danger">{depError}</p>}
-      <div className="flex" style={{ width: 280 + chartWidth }}>
-        <div className="w-[280px] shrink-0">
-          <div className="h-9 border-b border-border" />
-          {rows.map((r) => (
+    <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <ProjectSectionHeader
+        root={root}
+        count={items.length}
+        extent={extent}
+        isCollapsed={isCollapsed}
+        toggle={toggle}
+        onSelect={onSelect}
+      />
+      {!isCollapsed && rows.length === 0 && (
+        <p className="px-4 py-4 text-sm text-text-muted">No dated items in this project yet.</p>
+      )}
+      {!isCollapsed && rows.length > 0 && (
+        <div className="overflow-auto">
+          {depError && <p className="px-4 pt-3 text-sm text-danger">{depError}</p>}
+          <div className="flex" style={{ width: 280 + chartWidth }}>
+            <div className="w-[280px] shrink-0">
+              <div className="h-9 border-b border-border" />
+              {rows.map((r) => (
             <div
               key={r.id}
               className="flex items-center gap-2 border-b border-border/70"
@@ -2146,8 +2773,10 @@ function TimelineView({
               );
             })}
           </div>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

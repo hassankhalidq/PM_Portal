@@ -63,6 +63,8 @@ export default async function ProjectsPage({
     startDate: n.startDate ? n.startDate.toISOString().slice(0, 10) : null,
     endDate: n.endDate ? n.endDate.toISOString().slice(0, 10) : null,
     description: n.description,
+    blockReason: n.blockReason,
+    request: n.request,
     parentId: n.parentId,
     comments: n.comments.map((c) => ({
       id: c.id,

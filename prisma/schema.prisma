@@ -67,6 +67,8 @@ model ProjectNode {
   startDate   DateTime?
   endDate     DateTime?
   description String        @default("")
+  blockReason String        @default("")
+  request     String        @default("")
   parentId    String?
   parent      ProjectNode?  @relation("Tree", fields: [parentId], references: [id], onDelete: Cascade)
   children    ProjectNode[] @relation("Tree")
