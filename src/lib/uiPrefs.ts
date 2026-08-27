@@ -31,3 +31,34 @@ export function setShowKpis(value: boolean) {
   localStorage.setItem(KPIS_KEY, value ? "1" : "0");
   window.dispatchEvent(new CustomEvent<boolean>(KPIS_EVENT, { detail: value }));
 }
+
+// "Change alerts" — whether the Project header's notifications bell renders
+// at all. Defaults on.
+const ALERTS_KEY = "alerts-on";
+export const ALERTS_EVENT = "alerts-changed";
+
+export function getAlertsOn(): boolean {
+  if (typeof window === "undefined") return true;
+  const v = localStorage.getItem(ALERTS_KEY);
+  return v === null ? true : v === "1";
+}
+
+export function setAlertsOn(value: boolean) {
+  localStorage.setItem(ALERTS_KEY, value ? "1" : "0");
+  window.dispatchEvent(new CustomEvent<boolean>(ALERTS_EVENT, { detail: value }));
+}
+
+// "Snap drags to weeks" — Roadmap item/milestone drags round to the nearest
+// 7-day increment instead of the nearest day. Defaults off (current behavior).
+const SNAP_WEEKS_KEY = "snap-weeks";
+export const SNAP_WEEKS_EVENT = "snap-weeks-changed";
+
+export function getSnapWeeks(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(SNAP_WEEKS_KEY) === "1";
+}
+
+export function setSnapWeeks(value: boolean) {
+  localStorage.setItem(SNAP_WEEKS_KEY, value ? "1" : "0");
+  window.dispatchEvent(new CustomEvent<boolean>(SNAP_WEEKS_EVENT, { detail: value }));
+}

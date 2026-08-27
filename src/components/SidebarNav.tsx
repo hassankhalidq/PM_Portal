@@ -3,17 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { logout } from "@/lib/actions";
-import ThemeToggle from "./ThemeToggle";
-import {
-  DENSITY_EVENT,
-  KPIS_EVENT,
-  getDensity,
-  getShowKpis,
-  setDensity,
-  setShowKpis,
-  type Density,
-} from "@/lib/uiPrefs";
+import PreferencesMenu from "./PreferencesMenu";
 
 type Active = "dashboard" | "projects" | "roadmap" | "admin";
 
@@ -84,23 +74,11 @@ export default function SidebarNav({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [density, setDensityState] = useState<Density>("comfortable");
-  const [showKpis, setShowKpisState] = useState(true);
   const searchParams = useSearchParams();
 
   useEffect(() => {
     if (localStorage.getItem("sidebar-collapsed") === "1") setCollapsed(true);
-    setDensityState(getDensity());
-    setShowKpisState(getShowKpis());
     setMounted(true);
-    const onDensity = (e: Event) => setDensityState((e as CustomEvent<Density>).detail);
-    const onKpis = (e: Event) => setShowKpisState((e as CustomEvent<boolean>).detail);
-    window.addEventListener(DENSITY_EVENT, onDensity);
-    window.addEventListener(KPIS_EVENT, onKpis);
-    return () => {
-      window.removeEventListener(DENSITY_EVENT, onDensity);
-      window.removeEventListener(KPIS_EVENT, onKpis);
-    };
   }, []);
 
   const toggleCollapsed = () => {
@@ -109,18 +87,6 @@ export default function SidebarNav({
       localStorage.setItem("sidebar-collapsed", next ? "1" : "0");
       return next;
     });
-  };
-
-  const toggleDensity = () => {
-    const next: Density = density === "compact" ? "comfortable" : "compact";
-    setDensityState(next);
-    setDensity(next);
-  };
-
-  const toggleKpis = () => {
-    const next = !showKpis;
-    setShowKpisState(next);
-    setShowKpis(next);
   };
 
   const boardParam = searchParams.get("board");
@@ -222,62 +188,7 @@ export default function SidebarNav({
           </div>
         )}
 
-        <div className="border-t border-border p-3">
-          <div
-            className={`overflow-hidden ${TRANSITION}`}
-            style={{ maxHeight: collapsed ? 0 : 280, opacity: collapsed ? 0 : 1 }}
-          >
-            <ThemeToggle />
-            <button
-              type="button"
-              role="switch"
-              aria-checked={density === "compact"}
-              aria-label="Toggle row density"
-              onClick={toggleDensity}
-              className="mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-text-muted hover:bg-bg"
-            >
-              <span>{density === "compact" ? "Compact rows" : "Comfortable rows"}</span>
-              <span
-                className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-                  density === "compact" ? "bg-accent" : "bg-border"
-                }`}
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                    density === "compact" ? "translate-x-4" : "translate-x-0"
-                  }`}
-                />
-              </span>
-            </button>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={showKpis}
-              aria-label="Toggle KPI strip"
-              onClick={toggleKpis}
-              className="mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-text-muted hover:bg-bg"
-            >
-              <span>KPI strip</span>
-              <span
-                className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-                  showKpis ? "bg-accent" : "bg-border"
-                }`}
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                    showKpis ? "translate-x-4" : "translate-x-0"
-                  }`}
-                />
-              </span>
-            </button>
-            <p className="truncate px-3 pb-2 text-xs text-text-muted">{userName}</p>
-            <form action={logout}>
-              <button className="btn-ghost w-full justify-center text-text-muted" type="submit">
-                Log out
-              </button>
-            </form>
-          </div>
-        </div>
+        <PreferencesMenu userName={userName} role={role} collapsed={collapsed} />
       </aside>
     </div>
   );

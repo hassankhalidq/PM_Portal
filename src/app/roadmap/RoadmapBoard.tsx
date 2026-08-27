@@ -25,6 +25,7 @@ import { ROADMAP_THEMES } from "@/lib/roadmapThemes";
 import { formatDateRange, HoverCardContent, useHoverCard } from "./HoverCard";
 import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
 import { MILESTONE_META, MilestoneIcon, type MilestoneType } from "@/lib/milestoneIcons";
+import { getSnapWeeks, SNAP_WEEKS_EVENT } from "@/lib/uiPrefs";
 
 type RoadmapStage = "EXPLORING" | "PLANNED" | "COMMITTED";
 type ItemT = {
@@ -162,6 +163,14 @@ export default function RoadmapBoard({
   milestones: MilestoneT[];
 }) {
   const [pxPerDay, setPxPerDay] = useState(4);
+  const [snapWeeks, setSnapWeeksState] = useState(false);
+  useEffect(() => {
+    setSnapWeeksState(getSnapWeeks());
+    const onSnap = (e: Event) => setSnapWeeksState((e as CustomEvent<boolean>).detail);
+    window.addEventListener(SNAP_WEEKS_EVENT, onSnap);
+    return () => window.removeEventListener(SNAP_WEEKS_EVENT, onSnap);
+  }, []);
+  const snapDays = (raw: number) => (snapWeeks ? Math.round(raw / 7) * 7 : raw);
   const [panel, setPanel] = useState<Panel>(null);
   // Optimistic date overrides while a drag round-trips to the server.
   const [overrides, setOverrides] = useState<Record<string, { start: number; end: number }>>({});
@@ -446,7 +455,7 @@ export default function RoadmapBoard({
     const hoveredCategoryId = findHoveredLane(e.clientY) ?? d.origCategoryId;
     const restPacked = simulateLanePacking(laneEntriesExcluding(hoveredCategoryId, d.id)).packed;
     const targetRow = hoveredRow(e.clientY, hoveredCategoryId, restPacked.length);
-    const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+    const deltaDays = snapDays(Math.round((e.clientX - d.startX) / pxPerDay));
     const desired =
       d.kind === "milestone"
         ? (() => {
@@ -485,14 +494,14 @@ export default function RoadmapBoard({
       return;
     }
     if (d.kind === "item-resize-start") {
-      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      const deltaDays = snapDays(Math.round((e.clientX - d.startX) / pxPerDay));
       if (deltaDays !== 0) d.moved = true;
       const newStart = Math.min(d.origStart + deltaDays * DAY, d.origEnd - DAY);
       setOverrides((o) => ({ ...o, [d.id]: { start: newStart, end: d.origEnd } }));
       return;
     }
     if (d.kind === "item-resize-end") {
-      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      const deltaDays = snapDays(Math.round((e.clientX - d.startX) / pxPerDay));
       if (deltaDays !== 0) d.moved = true;
       const newEnd = Math.max(d.origEnd + deltaDays * DAY, d.origStart + DAY);
       setOverrides((o) => ({ ...o, [d.id]: { start: d.origStart, end: newEnd } }));
@@ -575,7 +584,7 @@ export default function RoadmapBoard({
     }
 
     if (d.kind === "item-resize-start" || d.kind === "item-resize-end") {
-      const deltaDays = Math.round((e.clientX - d.startX) / pxPerDay);
+      const deltaDays = snapDays(Math.round((e.clientX - d.startX) / pxPerDay));
       if (!d.moved || deltaDays === 0) {
         setOverrides((o) => {
           const { [d.id]: _, ...rest } = o;

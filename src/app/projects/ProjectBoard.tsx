@@ -5,8 +5,10 @@ import { useSearchParams } from "next/navigation";
 import {
   DENSITY_EVENT,
   KPIS_EVENT,
+  ALERTS_EVENT,
   getDensity,
   getShowKpis,
+  getAlertsOn,
   setDensity,
   setShowKpis,
   type Density,
@@ -271,16 +273,22 @@ export default function ProjectBoard({
   const paletteRef = useRef<HTMLDivElement>(null);
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+  const [alertsOn, setAlertsOnState] = useState(true);
+  const [lastSeenNotifAt, setLastSeenNotifAt] = useState("");
   useClosePopover(paletteOpen, () => setPaletteOpen(false), paletteRef);
   useClosePopover(notifOpen, () => setNotifOpen(false), notifRef);
 
   useEffect(() => {
     setShowKpisState(getShowKpis());
     setDensityState(getDensity());
+    setAlertsOnState(getAlertsOn());
+    setLastSeenNotifAt(localStorage.getItem("last-seen-notif-at") ?? "");
     const onKpis = (e: Event) => setShowKpisState((e as CustomEvent<boolean>).detail);
     const onDensity = (e: Event) => setDensityState((e as CustomEvent<Density>).detail);
+    const onAlerts = (e: Event) => setAlertsOnState((e as CustomEvent<boolean>).detail);
     window.addEventListener(KPIS_EVENT, onKpis);
     window.addEventListener(DENSITY_EVENT, onDensity);
+    window.addEventListener(ALERTS_EVENT, onAlerts);
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -291,6 +299,7 @@ export default function ProjectBoard({
     return () => {
       window.removeEventListener(KPIS_EVENT, onKpis);
       window.removeEventListener(DENSITY_EVENT, onDensity);
+      window.removeEventListener(ALERTS_EVENT, onAlerts);
       window.removeEventListener("keydown", onKeyDown);
     };
   }, []);
@@ -663,42 +672,53 @@ export default function ProjectBoard({
           🔍 Search
           <span className="figure ml-1 rounded border border-border px-1 text-[10px] text-text-muted">⌘K</span>
         </button>
-        <div className="relative" ref={notifRef}>
-          <button
-            type="button"
-            onClick={() => setNotifOpen((o) => !o)}
-            className="btn-ghost relative h-9 w-9 justify-center p-0 text-text-muted"
-            aria-label="Notifications"
-          >
-            🔔
-            {notifications.length > 0 && (
-              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-danger" />
-            )}
-          </button>
-          {notifOpen && (
-            <div className="animate-pop-in absolute right-0 top-full z-30 mt-1 max-h-80 w-80 overflow-y-auto rounded-lg border border-border bg-surface p-1.5 shadow-lg">
-              <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                What changed
-              </p>
-              {notifications.length === 0 && (
-                <p className="px-2 py-2 text-sm text-text-muted">Nothing recent.</p>
+        {alertsOn && (
+          <div className="relative" ref={notifRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setNotifOpen((o) => {
+                  const next = !o;
+                  if (next && notifications[0]?.when) {
+                    localStorage.setItem("last-seen-notif-at", notifications[0].when);
+                    setLastSeenNotifAt(notifications[0].when);
+                  }
+                  return next;
+                });
+              }}
+              className="btn-ghost relative h-9 w-9 justify-center p-0 text-text-muted"
+              aria-label="Notifications"
+            >
+              🔔
+              {notifications[0]?.when && new Date(notifications[0].when).getTime() > new Date(lastSeenNotifAt || 0).getTime() && (
+                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-danger" />
               )}
-              {notifications.map((n) => (
-                <button
-                  key={n.id}
-                  onClick={() => {
-                    setSelectedId(n.nodeId);
-                    setNotifOpen(false);
-                  }}
-                  className="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg"
-                  title={n.text}
-                >
-                  {n.text}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+            </button>
+            {notifOpen && (
+              <div className="animate-pop-in absolute right-0 top-full z-30 mt-1 max-h-80 w-80 overflow-y-auto rounded-lg border border-border bg-surface p-1.5 shadow-lg">
+                <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                  What changed
+                </p>
+                {notifications.length === 0 && (
+                  <p className="px-2 py-2 text-sm text-text-muted">Nothing recent.</p>
+                )}
+                {notifications.map((n) => (
+                  <button
+                    key={n.id}
+                    onClick={() => {
+                      setSelectedId(n.nodeId);
+                      setNotifOpen(false);
+                    }}
+                    className="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg"
+                    title={n.text}
+                  >
+                    {n.text}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
           New project
         </button>
