@@ -32,6 +32,7 @@ import {
   uploadAttachment,
 } from "@/lib/actions";
 import EntitySwitcher from "@/components/EntitySwitcher";
+import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
 
 type CommentT = { id: string; body: string; author: string; createdAt: string };
 type AttachmentT = { id: string; name: string; url: string; size: number };
@@ -1132,24 +1133,6 @@ function FiltersPopover({
 
 // Shared click-outside/Escape-to-close behavior for the small popover menus
 // below — same pattern already used by EntitySwitcher elsewhere in this app.
-function useClosePopover(open: boolean, onClose: () => void, ref: React.RefObject<HTMLElement>) {
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open, onClose, ref]);
-}
-
 // Dot + plain-text status control — replaces the former native `<select>`
 // pill. Same optimistic-update-with-rollback behavior, just a custom
 // absolute-positioned menu of colored-dot options instead of a native
@@ -1266,43 +1249,6 @@ function PriorityChip({ node }: { node: NodeT }) {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function ConfirmDeleteButton({
-  label = "Delete",
-  onConfirm,
-  disabled,
-}: {
-  label?: string;
-  onConfirm: () => void;
-  disabled?: boolean;
-}) {
-  const [armed, setArmed] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useClosePopover(armed, () => setArmed(false), ref);
-  return (
-    <div ref={ref} className="inline-block">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          if (!armed) {
-            setArmed(true);
-            return;
-          }
-          setArmed(false);
-          onConfirm();
-        }}
-        className={`btn ${
-          armed
-            ? "border border-danger bg-danger text-white hover:bg-danger"
-            : "btn-ghost text-danger"
-        }`}
-      >
-        {armed ? "Confirm delete" : label}
-      </button>
     </div>
   );
 }

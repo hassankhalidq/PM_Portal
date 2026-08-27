@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   applyRoadmapTheme,
   commitLaneDrop,
+  convertItemToMilestone,
+  convertMilestoneToItem,
   createCategory,
   createItem,
   createMilestone,
@@ -21,13 +23,16 @@ import {
 import EntitySwitcher from "@/components/EntitySwitcher";
 import { ROADMAP_THEMES } from "@/lib/roadmapThemes";
 import { formatDateRange, HoverCardContent, useHoverCard } from "./HoverCard";
+import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
 
+type RoadmapStage = "EXPLORING" | "PLANNED" | "COMMITTED";
 type ItemT = {
   id: string;
   name: string;
   description: string;
   startDate: string;
   endDate: string;
+  stage: RoadmapStage;
   categoryId: string;
   sortOrder: number;
 };
@@ -69,6 +74,16 @@ const MILESTONE_META: Record<MilestoneType, { label: string; color: string }> = 
   DEPRECATION: { label: "Deprecation", color: "#71717A" },
 };
 const SWATCHES = ["#4F46E5", "#0284C7", "#7C3AED", "#DB2777", "#D97706", "#475569"];
+
+// Reuses the same semantic tokens as everywhere else in the app (accent =
+// committed/confident, info = planned, warning = exploring/early) rather
+// than introducing a parallel color system just for this one chip set.
+const STAGE_META: Record<RoadmapStage, { label: string; dot: string; text: string }> = {
+  EXPLORING: { label: "Exploring", dot: "bg-warning", text: "text-warning" },
+  PLANNED: { label: "Planned", dot: "bg-info", text: "text-info" },
+  COMMITTED: { label: "Committed", dot: "bg-accent", text: "text-accent" },
+};
+const STAGE_ORDER: RoadmapStage[] = ["EXPLORING", "PLANNED", "COMMITTED"];
 
 const parse = (s: string) => Date.parse(s + "T00:00:00Z");
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
@@ -161,8 +176,8 @@ function MilestoneIcon({ type, size = 16 }: { type: MilestoneType; size?: number
 type Panel =
   | { kind: "item"; id: string }
   | { kind: "milestone"; id: string }
-  | { kind: "new-item" }
-  | { kind: "new-milestone" }
+  | { kind: "new-item"; categoryId?: string }
+  | { kind: "new-milestone"; categoryId?: string }
   | { kind: "lanes" }
   | null;
 
@@ -228,7 +243,23 @@ export default function RoadmapBoard({
 
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
   const [hiddenTypes, setHiddenTypes] = useState<Set<MilestoneType>>(new Set());
+  const [stageFilter, setStageFilter] = useState<RoadmapStage | "all">("all");
   const [isDragging, setIsDragging] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [addMenu, setAddMenu] = useState<{ categoryId: string; top: number; left: number } | null>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  useClosePopover(paletteOpen, () => setPaletteOpen(false), paletteRef);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const toggleCategory = (id: string) =>
     setHiddenCategories((prev) => {
@@ -340,6 +371,12 @@ export default function RoadmapBoard({
   const totalDays = Math.round((rangeEnd - rangeStart) / DAY);
   const width = totalDays * pxPerDay;
   const x = (t: number) => ((t - rangeStart) / DAY) * pxPerDay;
+
+  const jumpToToday = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft = Math.max(0, x(today) - containerWidth / 6);
+  };
 
   const headerSegments = useMemo(() => {
     const segs: { label: string; from: number; to: number; zone: "now" | "later" }[] = [];
@@ -671,6 +708,7 @@ export default function RoadmapBoard({
   const laneEntriesExcluding = (categoryId: string, excludeId: string): LaneEntry[] => {
     const out: LaneEntry[] = [];
     for (const i of allItems) {
+      if (stageFilter !== "all" && i.stage !== stageFilter) continue;
       if (i.id !== excludeId && i.categoryId === categoryId) out.push({ kind: "item", sortOrder: i.sortOrder, entry: i });
     }
     for (const m of milestones) {
@@ -741,7 +779,10 @@ export default function RoadmapBoard({
       list.push(e);
       byCategory.set(cid, list);
     };
-    for (const i of allItems) push(i.categoryId, { kind: "item", sortOrder: i.sortOrder, entry: i });
+    for (const i of allItems) {
+      if (stageFilter !== "all" && i.stage !== stageFilter) continue; // filtered-out items free their row
+      push(i.categoryId, { kind: "item", sortOrder: i.sortOrder, entry: i });
+    }
     for (const m of milestones) {
       if (hiddenTypes.has(m.type)) continue; // hidden milestones free their row
       push(m.categoryId, { kind: "milestone", sortOrder: m.sortOrder, entry: m });
@@ -750,7 +791,7 @@ export default function RoadmapBoard({
     for (const c of categories) map.set(c.id, simulateLanePacking(byCategory.get(c.id) ?? []));
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categories, milestones, overrides, pxPerDay, hiddenTypes]);
+  }, [categories, milestones, overrides, pxPerDay, hiddenTypes, stageFilter]);
 
   const selectedItem =
     panel?.kind === "item" ? allItems.find((i) => i.id === panel.id) ?? null : null;
@@ -758,6 +799,45 @@ export default function RoadmapBoard({
     panel?.kind === "milestone" ? milestones.find((m) => m.id === panel.id) ?? null : null;
 
   const activeTheme = ROADMAP_THEMES[currentTheme] ?? ROADMAP_THEMES.indigo;
+
+  type PaletteCommand = { id: string; label: string; run: () => void };
+  const paletteCommands: PaletteCommand[] = [
+    { id: "add-lane", label: "Add lane", run: () => setPanel({ kind: "lanes" }) },
+    { id: "manage-lanes", label: "Manage lanes", run: () => setPanel({ kind: "lanes" }) },
+    {
+      id: "dark-mode",
+      label: "Toggle dark mode",
+      run: () => {
+        const el = document.documentElement;
+        const next = !el.classList.contains("dark");
+        el.classList.toggle("dark", next);
+        localStorage.setItem("theme-preference", next ? "dark" : "light");
+      },
+    },
+  ];
+  const paletteQueryLower = paletteQuery.trim().toLowerCase();
+  const paletteItemResults = paletteQueryLower
+    ? allItems.filter((i) => i.name.toLowerCase().includes(paletteQueryLower)).slice(0, 6)
+    : [];
+  const paletteMsResults = paletteQueryLower
+    ? milestones.filter((m) => m.name.toLowerCase().includes(paletteQueryLower)).slice(0, 6)
+    : [];
+  const paletteCommandResults = paletteCommands.filter((c) => c.label.toLowerCase().includes(paletteQueryLower));
+  const runPaletteCommand = (cmd: PaletteCommand) => {
+    cmd.run();
+    setPaletteOpen(false);
+    setPaletteQuery("");
+  };
+  const pickPaletteItem = (id: string) => {
+    setPanel({ kind: "item", id });
+    setPaletteOpen(false);
+    setPaletteQuery("");
+  };
+  const pickPaletteMilestone = (id: string) => {
+    setPanel({ kind: "milestone", id });
+    setPaletteOpen(false);
+    setPaletteQuery("");
+  };
 
   return (
     <div className="flex h-screen flex-col">
@@ -778,6 +858,31 @@ export default function RoadmapBoard({
             actions={{ create: createRoadmap, rename: renameRoadmap, remove: deleteRoadmap }}
           />
         </div>
+        <div className="flex items-center gap-1.5">
+          {(["all", ...STAGE_ORDER] as const).map((k) => {
+            const on = stageFilter === k;
+            return (
+              <button
+                key={k}
+                onClick={() => setStageFilter(k)}
+                className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                  on ? "border-accent/30 bg-accent/10 text-accent" : "border-border text-text-muted hover:text-text"
+                }`}
+              >
+                {k === "all" ? "All stages" : STAGE_META[k].label}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          className="btn-ghost text-xs text-text-muted"
+          aria-label="Open command palette"
+        >
+          🔍 Search
+          <span className="figure ml-1 rounded border border-border px-1 text-[10px] text-text-muted">⌘K</span>
+        </button>
         <label className="flex items-center gap-2 text-xs text-text-muted">
           Zoom
           <input
@@ -790,6 +895,9 @@ export default function RoadmapBoard({
             aria-label="Timeline zoom"
           />
         </label>
+        <button className="btn-ghost" onClick={jumpToToday}>
+          Today
+        </button>
         <button className="btn-ghost" onClick={() => setPanel({ kind: "lanes" })}>
           Manage lanes
         </button>
@@ -810,9 +918,108 @@ export default function RoadmapBoard({
         </button>
       </header>
 
+      {paletteOpen && (
+        <div className="animate-overlay-in fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-24">
+          <div
+            ref={paletteRef}
+            className="animate-palette-in w-full max-w-lg rounded-xl border border-border bg-surface shadow-lg"
+          >
+            <input
+              autoFocus
+              className="w-full border-b border-border bg-transparent px-4 py-3 text-sm outline-none"
+              placeholder="Search items, milestones, or run a command…"
+              value={paletteQuery}
+              onChange={(e) => setPaletteQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (paletteItemResults[0]) pickPaletteItem(paletteItemResults[0].id);
+                  else if (paletteMsResults[0]) pickPaletteMilestone(paletteMsResults[0].id);
+                  else if (paletteCommandResults[0]) runPaletteCommand(paletteCommandResults[0]);
+                }
+              }}
+            />
+            <div className="max-h-96 overflow-y-auto p-1.5">
+              {paletteItemResults.length > 0 && (
+                <>
+                  <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Items</p>
+                  {paletteItemResults.map((i) => (
+                    <button
+                      key={i.id}
+                      onClick={() => pickPaletteItem(i.id)}
+                      className="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+                    >
+                      {i.name}
+                    </button>
+                  ))}
+                </>
+              )}
+              {paletteMsResults.length > 0 && (
+                <>
+                  <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                    Milestones
+                  </p>
+                  {paletteMsResults.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => pickPaletteMilestone(m.id)}
+                      className="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </>
+              )}
+              <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Commands</p>
+              {paletteCommandResults.length === 0 && (
+                <p className="px-2 py-2 text-sm text-text-muted">No matching commands.</p>
+              )}
+              {paletteCommandResults.map((cmd) => (
+                <button
+                  key={cmd.id}
+                  onClick={() => runPaletteCommand(cmd)}
+                  className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+                >
+                  {cmd.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {addMenu && (
+        <div className="fixed inset-0 z-40" onClick={() => setAddMenu(null)}>
+          <div
+            className="animate-pop-in fixed w-44 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            style={{ top: addMenu.top, left: addMenu.left }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Add to lane</p>
+            <button
+              onClick={() => {
+                setPanel({ kind: "new-item", categoryId: addMenu.categoryId });
+                setAddMenu(null);
+              }}
+              className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+            >
+              Roadmap item
+            </button>
+            <button
+              onClick={() => {
+                setPanel({ kind: "new-milestone", categoryId: addMenu.categoryId });
+                setAddMenu(null);
+              }}
+              className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg"
+            >
+              Milestone
+            </button>
+          </div>
+        </div>
+      )}
+
       <div
         ref={scrollRef}
-        className="roadmap-content flex-1 overflow-auto"
+        className="roadmap-content animate-view-in flex-1 overflow-auto"
         style={{ ["--roadmap-tint" as string]: activeTheme.bgTint }}
       >
         <div className="min-w-full w-max">
@@ -863,22 +1070,33 @@ export default function RoadmapBoard({
                   laneIdx < categories.length - 1 ? "mb-3" : ""
                 }`}
               >
-                <button
-                  onClick={() => toggleCategory(c.id)}
-                  title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
-                  className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-2 border-r border-border px-4 text-left hover:brightness-110 ${
+                <div
+                  className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-1 border-r border-border px-4 hover:brightness-110 ${
                     hiddenCategories.has(c.id) ? "opacity-50" : ""
                   } ${
                     isDragging && dragRowPreview?.categoryId === c.id ? "ring-2 ring-inset ring-white" : ""
                   }`}
                   style={{ minHeight: Math.max(56, rowCount * 38 + 22), background: c.color }}
                 >
-                  <span
-                    className={`truncate text-sm font-medium text-white ${hiddenCategories.has(c.id) ? "line-through" : ""}`}
+                  <button
+                    onClick={() => toggleCategory(c.id)}
+                    title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
+                    className="min-w-0 flex-1 truncate text-left text-sm font-medium text-white"
                   >
-                    {c.name}
-                  </span>
-                </button>
+                    <span className={hiddenCategories.has(c.id) ? "line-through" : ""}>{c.name}</span>
+                  </button>
+                  <button
+                    aria-label={`Add to ${c.name}`}
+                    title="Add item or milestone to this lane"
+                    onClick={(e) => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      setAddMenu({ categoryId: c.id, top: r.bottom + 6, left: r.left });
+                    }}
+                    className="grid h-5 w-5 shrink-0 place-items-center rounded text-white/80 hover:bg-white/20"
+                  >
+                    +
+                  </button>
+                </div>
                 <div
                   className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
                   style={{ width, minHeight: Math.max(56, rowCount * 38 + 22) }}
@@ -951,6 +1169,14 @@ export default function RoadmapBoard({
             <MilestoneIcon type={t} size={12} /> {MILESTONE_META[t].label}
           </button>
         ))}
+        <span className="h-3 w-px bg-border" aria-hidden />
+        {STAGE_ORDER.map((s) => (
+          <span key={s} className="flex items-center gap-1.5">
+            <span className={`h-1.5 w-1.5 rounded-full ${STAGE_META[s].dot}`} />
+            {STAGE_META[s].label}
+            <span className="figure text-text">{allItems.filter((i) => i.stage === s).length}</span>
+          </span>
+        ))}
         <span className="ml-auto">Drag a bar or marker to reschedule · click a lane to dim it · click to open details</span>
       </footer>
 
@@ -961,7 +1187,7 @@ export default function RoadmapBoard({
       )}
       {panel?.kind === "new-item" && (
         <PanelFrame title="Add roadmap item" onClose={() => setPanel(null)}>
-          <ItemForm categories={categories} onDone={() => setPanel(null)} />
+          <ItemForm categories={categories} defaultCategoryId={panel.categoryId} onDone={() => setPanel(null)} />
         </PanelFrame>
       )}
       {selectedItem && (
@@ -971,7 +1197,12 @@ export default function RoadmapBoard({
       )}
       {panel?.kind === "new-milestone" && (
         <PanelFrame title="Add milestone" onClose={() => setPanel(null)}>
-          <MilestoneForm categories={categories} roadmapId={currentRoadmapId} onDone={() => setPanel(null)} />
+          <MilestoneForm
+            categories={categories}
+            defaultCategoryId={panel.categoryId}
+            roadmapId={currentRoadmapId}
+            onDone={() => setPanel(null)}
+          />
         </PanelFrame>
       )}
       {selectedMs && (
@@ -1027,7 +1258,9 @@ function ItemBar({
       onMouseLeave={hover.onMouseLeave}
     >
       <button
-        className="absolute top-0 z-10 h-7 w-full cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
+        className={`absolute top-0 z-10 h-7 w-full cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing ${
+          item.stage === "EXPLORING" ? "border border-dashed border-white/60 opacity-75" : ""
+        }`}
         style={{ background: row % 2 === 1 ? darken(color, 0.18) : color }}
         onPointerDown={(e) => onBeginMove(e, item.id, d.start, d.end, item.categoryId)}
         onPointerMove={onDragMove}
@@ -1141,33 +1374,39 @@ function PanelFrame({
   children: React.ReactNode;
 }) {
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-lg">
-      <div className="flex items-center justify-between border-b border-border px-5 py-4">
-        <h2 className="text-base font-semibold">{title}</h2>
-        <button aria-label="Close panel" className="btn-ghost h-8 w-8 justify-center p-0" onClick={onClose}>
-          ✕
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
-    </aside>
+    <>
+      <div className="animate-overlay-in fixed inset-0 z-30 bg-black/40" onClick={onClose} />
+      <aside className="animate-drawer-in fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-lg">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <h2 className="text-base font-semibold">{title}</h2>
+          <button aria-label="Close panel" className="btn-ghost h-8 w-8 justify-center p-0" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+      </aside>
+    </>
   );
 }
 
 function ItemForm({
   categories,
   item,
+  defaultCategoryId,
   onDone,
 }: {
   categories: CategoryT[];
   item?: ItemT;
+  defaultCategoryId?: string;
   onDone: () => void;
 }) {
   const [form, setForm] = useState({
-    categoryId: item?.categoryId ?? categories[0]?.id ?? "",
+    categoryId: item?.categoryId ?? defaultCategoryId ?? categories[0]?.id ?? "",
     name: item?.name ?? "",
     description: item?.description ?? "",
     startDate: item?.startDate ?? new Date().toISOString().slice(0, 10),
     endDate: item?.endDate ?? new Date(Date.now() + 13 * DAY).toISOString().slice(0, 10),
+    stage: item?.stage ?? ("PLANNED" as RoadmapStage),
   });
   const [pending, start] = useTransition();
 
@@ -1179,12 +1418,32 @@ function ItemForm({
     });
 
   const remove = () => {
-    if (!item || !confirm("Delete this roadmap item?")) return;
+    if (!item) return;
     start(async () => {
       await deleteItem(item.id);
       onDone();
     });
   };
+
+  const makeMilestone = () => {
+    if (!item) return;
+    start(async () => {
+      await convertItemToMilestone(item.id);
+      onDone();
+    });
+  };
+
+  const nudgeStart = (days: number) =>
+    setForm((f) => ({
+      ...f,
+      startDate: new Date(parse(f.startDate) + days * DAY).toISOString().slice(0, 10),
+      endDate: new Date(parse(f.endDate) + days * DAY).toISOString().slice(0, 10),
+    }));
+  const nudgeDuration = (days: number) =>
+    setForm((f) => {
+      const minEnd = parse(f.startDate) + DAY;
+      return { ...f, endDate: new Date(Math.max(minEnd, parse(f.endDate) + days * DAY)).toISOString().slice(0, 10) };
+    });
 
   return (
     <div className="space-y-4">
@@ -1206,6 +1465,26 @@ function ItemForm({
           ))}
         </select>
       </div>
+      <div>
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Stage</label>
+        <div className="flex gap-1.5">
+          {STAGE_ORDER.map((s) => {
+            const on = form.stage === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setForm({ ...form, stage: s })}
+                className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                  on ? `border-transparent bg-bg ${STAGE_META[s].text}` : "border-border text-text-muted"
+                }`}
+              >
+                {STAGE_META[s].label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Start</label>
@@ -1226,6 +1505,21 @@ function ItemForm({
           />
         </div>
       </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-text-muted">Adjust</span>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeStart(-7)}>
+          ◀ 1w
+        </button>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeStart(7)}>
+          1w ▶
+        </button>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeDuration(-7)}>
+          − 1w
+        </button>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeDuration(7)}>
+          + 1w
+        </button>
+      </div>
       <div>
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Description</label>
         <textarea
@@ -1234,15 +1528,16 @@ function ItemForm({
           onChange={(e) => setForm({ ...form, description: e.target.value })}
         />
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button className="btn-primary" onClick={save} disabled={pending || !form.name.trim() || !form.categoryId}>
           {pending ? "Saving..." : item ? "Save changes" : "Add item"}
         </button>
         {item && (
-          <button className="btn-ghost text-danger" onClick={remove} disabled={pending}>
-            Delete
+          <button className="btn-ghost" onClick={makeMilestone} disabled={pending}>
+            Make milestone
           </button>
         )}
+        {item && <ConfirmDeleteButton onConfirm={remove} disabled={pending} />}
       </div>
     </div>
   );
@@ -1252,15 +1547,17 @@ function MilestoneForm({
   categories,
   milestone,
   roadmapId,
+  defaultCategoryId,
   onDone,
 }: {
   categories: CategoryT[];
   milestone?: MilestoneT;
   roadmapId: string;
+  defaultCategoryId?: string;
   onDone: () => void;
 }) {
   const [form, setForm] = useState({
-    categoryId: milestone?.categoryId ?? categories[0]?.id ?? "",
+    categoryId: milestone?.categoryId ?? defaultCategoryId ?? categories[0]?.id ?? "",
     name: milestone?.name ?? "",
     type: milestone?.type ?? ("RELEASE" as MilestoneType),
     date: milestone?.date ?? new Date().toISOString().slice(0, 10),
@@ -1276,12 +1573,23 @@ function MilestoneForm({
     });
 
   const remove = () => {
-    if (!milestone || !confirm("Delete this milestone?")) return;
+    if (!milestone) return;
     start(async () => {
       await deleteMilestone(milestone.id);
       onDone();
     });
   };
+
+  const makeItem = () => {
+    if (!milestone) return;
+    start(async () => {
+      await convertMilestoneToItem(milestone.id);
+      onDone();
+    });
+  };
+
+  const nudgeDate = (days: number) =>
+    setForm((f) => ({ ...f, date: new Date(parse(f.date) + days * DAY).toISOString().slice(0, 10) }));
 
   return (
     <div className="space-y-4">
@@ -1331,6 +1639,21 @@ function MilestoneForm({
       <div className="flex items-center gap-2 rounded-lg bg-bg px-3 py-2 text-xs text-text-muted">
         <MilestoneIcon type={form.type} /> Shown as this marker in its lane.
       </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-text-muted">Adjust</span>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeDate(-7)}>
+          ◀ 1w
+        </button>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeDate(-1)}>
+          ◀ 1d
+        </button>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeDate(1)}>
+          1d ▶
+        </button>
+        <button type="button" className="figure rounded-md border border-border px-2 py-1 text-[11px]" onClick={() => nudgeDate(7)}>
+          1w ▶
+        </button>
+      </div>
       <div>
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Description</label>
         <textarea
@@ -1339,15 +1662,16 @@ function MilestoneForm({
           onChange={(e) => setForm({ ...form, description: e.target.value })}
         />
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button className="btn-primary" onClick={save} disabled={pending || !form.name.trim() || !form.categoryId}>
           {pending ? "Saving..." : milestone ? "Save changes" : "Add milestone"}
         </button>
         {milestone && (
-          <button className="btn-ghost text-danger" onClick={remove} disabled={pending}>
-            Delete
+          <button className="btn-ghost" onClick={makeItem} disabled={pending}>
+            Make item
           </button>
         )}
+        {milestone && <ConfirmDeleteButton onConfirm={remove} disabled={pending} />}
       </div>
     </div>
   );
@@ -1357,22 +1681,7 @@ function ThemeMenu({ roadmapId, currentTheme }: { roadmapId: string; currentThem
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  useClosePopover(open, () => setOpen(false), ref);
 
   const active = ROADMAP_THEMES[currentTheme] ?? ROADMAP_THEMES.indigo;
 
@@ -1383,7 +1692,7 @@ function ThemeMenu({ roadmapId, currentTheme }: { roadmapId: string; currentThem
         Theme <span className="text-text-muted">▾</span>
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-border bg-surface p-3 shadow-lg">
+        <div className="animate-pop-in absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-border bg-surface p-3 shadow-lg">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">Theme</h3>
           <div className="flex flex-wrap gap-2">
             {Object.entries(ROADMAP_THEMES).map(([key, t]) => (
@@ -1519,13 +1828,12 @@ function LaneRow({
       >
         ↓
       </button>
-      <button
-        className="btn-ghost h-7 w-7 justify-center p-0 text-danger"
+      <ConfirmDeleteButton
+        label="✕"
+        variant="icon"
         disabled={onlyOne || pending}
-        aria-label="Delete lane"
         title={onlyOne ? "At least one lane must exist" : "Delete lane and its items"}
-        onClick={() => {
-          if (!confirm(`Delete lane "${category.name}" and all its items?`)) return;
+        onConfirm={() => {
           setError("");
           start(async () => {
             try {
@@ -1535,9 +1843,7 @@ function LaneRow({
             }
           });
         }}
-      >
-        ✕
-      </button>
+      />
     </div>
   );
 }

@@ -47,6 +47,7 @@ export default async function RoadmapPage({
             description: i.description,
             startDate: i.startDate.toISOString().slice(0, 10),
             endDate: i.endDate.toISOString().slice(0, 10),
+            stage: i.stage,
             categoryId: i.categoryId,
             sortOrder: i.sortOrder,
           })),

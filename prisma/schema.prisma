@@ -35,6 +35,12 @@ enum MilestoneType {
   DEPRECATION
 }
 
+enum RoadmapStage {
+  EXPLORING
+  PLANNED
+  COMMITTED
+}
+
 model User {
   id           String    @id @default(cuid())
   email        String    @unique
@@ -198,16 +204,17 @@ model Category {
 }
 
 model RoadmapItem {
-  id          String   @id @default(cuid())
+  id          String       @id @default(cuid())
   name        String
-  description String   @default("")
+  description String       @default("")
   startDate   DateTime
   endDate     DateTime
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  stage       RoadmapStage @default(PLANNED)
+  category    Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   categoryId  String
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  sortOrder   Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   @@index([categoryId])
 }

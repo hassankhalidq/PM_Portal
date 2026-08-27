@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { auth, signIn, signOut } from "@/auth";
 import { AuthError } from "next-auth";
-import type { NodeStatus, Priority, MilestoneType, Role } from "@prisma/client";
+import type { NodeStatus, Priority, MilestoneType, RoadmapStage, Role } from "@prisma/client";
 import { hash } from "bcryptjs";
 import { ROADMAP_THEMES } from "@/lib/roadmapThemes";
 
@@ -540,6 +540,7 @@ export async function createItem(data: {
   description: string;
   startDate: string;
   endDate: string;
+  stage?: RoadmapStage;
 }) {
   await requireSession();
   if (!data.name.trim()) return;
@@ -551,6 +552,7 @@ export async function createItem(data: {
       description: data.description,
       startDate: new Date(data.startDate),
       endDate: new Date(data.endDate),
+      ...(data.stage !== undefined ? { stage: data.stage } : {}),
       sortOrder,
     },
   });
@@ -559,7 +561,14 @@ export async function createItem(data: {
 
 export async function updateItem(
   id: string,
-  data: { categoryId?: string; name?: string; description?: string; startDate?: string; endDate?: string }
+  data: {
+    categoryId?: string;
+    name?: string;
+    description?: string;
+    startDate?: string;
+    endDate?: string;
+    stage?: RoadmapStage;
+  }
 ) {
   await requireSession();
   const sortOrder = data.categoryId !== undefined ? await appendSortOrder(data.categoryId) : undefined;
@@ -571,6 +580,7 @@ export async function updateItem(
       ...(data.description !== undefined ? { description: data.description } : {}),
       ...(data.startDate !== undefined ? { startDate: new Date(data.startDate) } : {}),
       ...(data.endDate !== undefined ? { endDate: new Date(data.endDate) } : {}),
+      ...(data.stage !== undefined ? { stage: data.stage } : {}),
     },
   });
   revalidatePath("/roadmap");
@@ -579,6 +589,53 @@ export async function updateItem(
 export async function deleteItem(id: string) {
   await requireSession();
   await prisma.roadmapItem.delete({ where: { id } });
+  revalidatePath("/roadmap");
+}
+
+// Converts a roadmap item into a milestone (its start date becomes the
+// milestone's date, type defaults to RELEASE) or vice versa (a milestone
+// becomes a 21-day item starting on its date, stage defaults to EXPLORING —
+// it's a fresh idea again, not yet scheduled with confidence). Each is one
+// create+delete transaction so a failure never leaves both records behind.
+export async function convertItemToMilestone(id: string) {
+  await requireSession();
+  const item = await prisma.roadmapItem.findUniqueOrThrow({ where: { id } });
+  const sortOrder = await nextSortOrderForDate(item.categoryId, item.startDate.getTime());
+  await prisma.$transaction([
+    prisma.milestone.create({
+      data: {
+        name: item.name,
+        type: "RELEASE",
+        date: item.startDate,
+        description: item.description,
+        categoryId: item.categoryId,
+        sortOrder,
+      },
+    }),
+    prisma.roadmapItem.delete({ where: { id } }),
+  ]);
+  revalidatePath("/roadmap");
+}
+
+export async function convertMilestoneToItem(id: string) {
+  await requireSession();
+  const ms = await prisma.milestone.findUniqueOrThrow({ where: { id } });
+  const endDate = new Date(ms.date.getTime() + 21 * 86400000);
+  const sortOrder = await nextSortOrderForDate(ms.categoryId, ms.date.getTime());
+  await prisma.$transaction([
+    prisma.roadmapItem.create({
+      data: {
+        name: ms.name,
+        description: ms.description,
+        startDate: ms.date,
+        endDate,
+        stage: "EXPLORING",
+        categoryId: ms.categoryId,
+        sortOrder,
+      },
+    }),
+    prisma.milestone.delete({ where: { id } }),
+  ]);
   revalidatePath("/roadmap");
 }
 
