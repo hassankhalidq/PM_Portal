@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -10,8 +11,6 @@ import {
   getDensity,
   getShowKpis,
   getAlertsOn,
-  setDensity,
-  setShowKpis,
   type Density,
 } from "@/lib/uiPrefs";
 import {
@@ -35,7 +34,7 @@ import {
   uploadAttachment,
 } from "@/lib/actions";
 import EntitySwitcher from "@/components/EntitySwitcher";
-import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
+import { useClosePopover, useFloatingPosition, ConfirmDeleteButton } from "@/components/ui";
 import { ownerInitials, ownerColor } from "@/lib/avatar";
 
 type CommentT = { id: string; body: string; author: string; createdAt: string };
@@ -122,9 +121,9 @@ function fmtSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function ProgressBar({ value, className = "" }: { value: number; className?: string }) {
+function ProgressBar({ value, className = "w-16" }: { value: number; className?: string }) {
   return (
-    <div className={`h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-border ${className}`}>
+    <div className={`h-1.5 shrink-0 overflow-hidden rounded-full bg-border ${className}`}>
       <div
         className="h-full rounded-full bg-accent"
         style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
@@ -304,17 +303,6 @@ export default function ProjectBoard({
       window.removeEventListener("keydown", onKeyDown);
     };
   }, []);
-
-  const toggleDensity = () => {
-    const next: Density = density === "compact" ? "comfortable" : "compact";
-    setDensityState(next);
-    setDensity(next);
-  };
-  const toggleKpis = () => {
-    const next = !showKpis;
-    setShowKpisState(next);
-    setShowKpis(next);
-  };
 
   const toggleRowSelect = (id: string) =>
     setSelectedRows((prev) => {
@@ -754,12 +742,6 @@ export default function ProjectBoard({
         <button type="button" className="btn-ghost text-xs text-text-muted" onClick={toggleExpandAll}>
           {anyCollapsed ? "Expand all" : "Collapse all"}
         </button>
-        <button type="button" className="btn-ghost text-xs text-text-muted" onClick={toggleDensity}>
-          {density === "compact" ? "Comfortable" : "Compact"}
-        </button>
-        <button type="button" className="btn-ghost text-xs text-text-muted" onClick={toggleKpis}>
-          {showKpis ? "Hide KPIs" : "Show KPIs"}
-        </button>
       </div>
 
       {showKpis && (
@@ -1053,29 +1035,15 @@ function FiltersPopover({
   owners: string[];
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { menuRef, style } = useFloatingPosition(open, triggerRef);
+  useClosePopover(open, () => setOpen(false), menuRef);
 
   const activeCount = [filters.owner, filters.status, filters.priority].filter(Boolean).length;
 
   return (
-    <div className="relative" ref={ref}>
-      <button className="btn-ghost" onClick={() => setOpen((o) => !o)}>
+    <>
+      <button ref={triggerRef} className="btn-ghost" onClick={() => setOpen((o) => !o)}>
         Filters
         {activeCount > 0 && (
           <span className="on-accent figure flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px]">
@@ -1083,8 +1051,13 @@ function FiltersPopover({
           </span>
         )}
       </button>
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-2 w-64 space-y-3 rounded-xl border border-border bg-surface p-4 shadow-lg">
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={style}
+            className="z-30 w-64 space-y-3 rounded-xl border border-border bg-surface p-4 shadow-lg"
+          >
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Owner</label>
             <select
@@ -1138,14 +1111,13 @@ function FiltersPopover({
               Clear filters
             </button>
           )}
-        </div>
-      )}
-    </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
-// Shared click-outside/Escape-to-close behavior for the small popover menus
-// below — same pattern already used by EntitySwitcher elsewhere in this app.
 // Dot + plain-text status control — replaces the former native `<select>`
 // pill. Same optimistic-update-with-rollback behavior, just a custom
 // absolute-positioned menu of colored-dot options instead of a native
@@ -1155,8 +1127,9 @@ function StatusChip({ node }: { node: NodeT }) {
   const [value, setValue] = useState(node.status);
   useEffect(() => setValue(node.status), [node.status]);
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useClosePopover(open, () => setOpen(false), ref);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { menuRef, style } = useFloatingPosition(open, triggerRef);
+  useClosePopover(open, () => setOpen(false), menuRef);
 
   const pick = (next: NodeT["status"]) => {
     setOpen(false);
@@ -1172,8 +1145,9 @@ function StatusChip({ node }: { node: NodeT }) {
   };
 
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Status"
         disabled={pending}
@@ -1186,25 +1160,29 @@ function StatusChip({ node }: { node: NodeT }) {
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_META[value].bg}`} />
         <span className="truncate">{STATUS_META[value].label}</span>
       </button>
-      {open && (
-        <div
-          className="animate-pop-in absolute left-0 top-full z-20 mt-1 w-36 rounded-lg border border-border bg-surface p-1 shadow-lg"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {(Object.keys(STATUS_META) as NodeT["status"][]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => pick(k)}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-text-muted hover:bg-surface2"
-            >
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_META[k].bg}`} />
-              {STATUS_META[k].label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={style}
+            className="animate-pop-in z-20 w-36 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(Object.keys(STATUS_META) as NodeT["status"][]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => pick(k)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-text-muted hover:bg-surface2"
+              >
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_META[k].bg}`} />
+                {STATUS_META[k].label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -1215,8 +1193,9 @@ function PriorityChip({ node }: { node: NodeT }) {
   const [value, setValue] = useState(node.priority);
   useEffect(() => setValue(node.priority), [node.priority]);
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useClosePopover(open, () => setOpen(false), ref);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { menuRef, style } = useFloatingPosition(open, triggerRef);
+  useClosePopover(open, () => setOpen(false), menuRef);
 
   const pick = (next: NodeT["priority"]) => {
     setOpen(false);
@@ -1232,8 +1211,9 @@ function PriorityChip({ node }: { node: NodeT }) {
   };
 
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Priority"
         disabled={pending}
@@ -1245,24 +1225,28 @@ function PriorityChip({ node }: { node: NodeT }) {
       >
         {PRIORITY_META[value].label}
       </button>
-      {open && (
-        <div
-          className="animate-pop-in absolute left-0 top-full z-20 mt-1 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {(Object.keys(PRIORITY_META) as NodeT["priority"][]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => pick(k)}
-              className={`block w-full rounded-md px-2 py-1.5 text-left font-mono text-[10px] font-semibold uppercase tracking-wider hover:bg-surface2 ${PRIORITY_META[k].labelColor}`}
-            >
-              {PRIORITY_META[k].label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={style}
+            className="animate-pop-in z-20 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(Object.keys(PRIORITY_META) as NodeT["priority"][]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => pick(k)}
+                className={`block w-full rounded-md px-2 py-1.5 text-left font-mono text-[10px] font-semibold uppercase tracking-wider hover:bg-surface2 ${PRIORITY_META[k].labelColor}`}
+              >
+                {PRIORITY_META[k].label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -1382,9 +1366,9 @@ function GroupHeader({
         <div className="flex items-center px-2">
           <PriorityChip node={node} />
         </div>
-        <div className="flex items-center gap-2 px-3">
-          <ProgressBar value={node.progress} className="w-16" />
-          <span className="figure text-xs text-text-muted">{node.progress}%</span>
+        <div className="flex items-center gap-2 px-3" title="Rolled up from this project's items">
+          <ProgressBar value={progressRollup(node, byParent)} className="w-16" />
+          <span className="figure text-xs text-text-muted">{progressRollup(node, byParent)}%</span>
         </div>
         <div className="flex items-center justify-center px-2">
           {node.link && (
@@ -1541,9 +1525,12 @@ function Row({
         <div className="flex items-center px-2">
           <PriorityChip node={node} />
         </div>
-        <div className="flex items-center gap-2 px-3">
-          <ProgressBar value={node.progress} className="w-16" />
-          <span className="figure text-xs text-text-muted">{node.progress}%</span>
+        <div
+          className="flex items-center gap-2 px-3"
+          title={(byParent.get(node.id)?.length ?? 0) > 0 ? "Rolled up from this item's children" : undefined}
+        >
+          <ProgressBar value={progressRollup(node, byParent)} className="w-16" />
+          <span className="figure text-xs text-text-muted">{progressRollup(node, byParent)}%</span>
         </div>
         <div className="flex items-center justify-center px-2">
           {node.link && (
@@ -1690,12 +1677,28 @@ function SidePanel({
   const [uploadError, setUploadError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
+  // A node with children shows/edits a rolled-up progress, not its own raw
+  // field (see progressRollup) — building byParent from allNodes here rather
+  // than threading the board's own map down through every intermediate
+  // component just for this one read-only case.
+  const byParent = useMemo(() => {
+    const m = new Map<string | null, NodeT[]>();
+    for (const n of allNodes) {
+      const list = m.get(n.parentId) ?? [];
+      list.push(n);
+      m.set(n.parentId, list);
+    }
+    return m;
+  }, [allNodes]);
+  const hasChildren = (byParent.get(node.id)?.length ?? 0) > 0;
+  const rollupProgress = hasChildren ? progressRollup(node, byParent) : form.progress;
+
   const save = () =>
     start(async () => {
       await updateNode(node.id, {
         name: form.name,
         owner: form.owner,
-        progress: form.progress,
+        ...(hasChildren ? {} : { progress: form.progress }),
         link: form.link,
         startDate: form.startDate || null,
         endDate: form.endDate || null,
@@ -1841,17 +1844,26 @@ function SidePanel({
         <div>
           <div className="mb-1 flex items-center justify-between">
             <label className="block text-xs font-semibold uppercase tracking-wider text-text-muted">Progress</label>
-            <span className="figure text-xs font-medium">{form.progress}%</span>
+            <span className="figure text-xs font-medium">{rollupProgress}%</span>
           </div>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={form.progress}
-            onChange={(e) => setForm({ ...form, progress: Number(e.target.value) })}
-            className="w-full accent-[var(--accent-hover)]"
-          />
+          {hasChildren ? (
+            <>
+              <ProgressBar value={rollupProgress} className="w-full" />
+              <p className="mt-1 text-xs text-text-muted">
+                Rolled up from this project&rsquo;s items — not directly editable.
+              </p>
+            </>
+          ) : (
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={form.progress}
+              onChange={(e) => setForm({ ...form, progress: Number(e.target.value) })}
+              className="w-full accent-[var(--accent-hover)]"
+            />
+          )}
         </div>
         <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-text-muted">Link</label>
@@ -2098,6 +2110,7 @@ function ProjectSectionHeader({
   root,
   count,
   extent,
+  progress,
   isCollapsed,
   toggle,
   onSelect,
@@ -2105,6 +2118,7 @@ function ProjectSectionHeader({
   root: NodeT;
   count: number;
   extent: { start: Date | null; end: Date | null };
+  progress: number;
   isCollapsed: boolean;
   toggle: (id: string) => void;
   onSelect: (id: string) => void;
@@ -2141,9 +2155,9 @@ function ProjectSectionHeader({
         <div className="w-28">
           <PriorityChip node={root} />
         </div>
-        <div className="flex items-center gap-1.5">
-          <ProgressBar value={root.progress} className="w-16" />
-          <span className="figure text-xs text-text-muted">{root.progress}%</span>
+        <div className="flex items-center gap-1.5" title="Rolled up from this project's items">
+          <ProgressBar value={progress} className="w-16" />
+          <span className="figure text-xs text-text-muted">{progress}%</span>
         </div>
         <span
           className="figure text-xs text-text-muted"
@@ -2218,6 +2232,7 @@ function KanbanProjectSection({
         root={root}
         count={items.length}
         extent={extent}
+        progress={progressRollup(root, byParent)}
         isCollapsed={isCollapsed}
         toggle={toggle}
         onSelect={onSelect}
@@ -2265,8 +2280,8 @@ function KanbanProjectSection({
                         {n.owner && <span className="truncate text-xs text-text-muted">{n.owner}</span>}
                       </div>
                       <div className="mt-2 flex items-center gap-1.5">
-                        <ProgressBar value={n.progress} />
-                        <span className="figure text-[11px] text-text-muted">{n.progress}%</span>
+                        <ProgressBar value={progressRollup(n, byParent)} />
+                        <span className="figure text-[11px] text-text-muted">{progressRollup(n, byParent)}%</span>
                       </div>
                       {n.status === "BLOCKED" && n.blockReason && (
                         <p className="mt-2 rounded-md bg-danger/10 p-1.5 text-xs text-danger">{n.blockReason}</p>
@@ -2316,6 +2331,18 @@ function effectiveLeafRange(
   const openEnded = node.status !== "DONE";
   const end = openEnded && today > minEnd ? today : minEnd;
   return { start, end, openEnded };
+}
+
+// A node with children shows the average of its own children's (recursively
+// rolled-up) progress rather than its own stored field — that field is only
+// ever meaningful, and only ever edited, for leaves. Takes the node itself
+// (not just an id) since byParent's arrays already hold full NodeT objects,
+// so no separate byId map is needed to walk back down.
+function progressRollup(node: NodeT, byParent: Map<string | null, NodeT[]>): number {
+  const kids = byParent.get(node.id) ?? [];
+  if (kids.length === 0) return node.progress;
+  const sum = kids.reduce((acc, k) => acc + progressRollup(k, byParent), 0);
+  return Math.round(sum / kids.length);
 }
 
 function dateExtent(
@@ -2454,7 +2481,17 @@ function TimelineProjectSection({
       const kids = (byParent.get(id) ?? []).filter((k) => itemIds.has(k.id));
       const isGroup = kids.length > 0;
       const { start, end, openEnded } = dateExtent(id, byParent, byId, today);
-      out.push({ id, name: node.name, depth, isGroup, status: isGroup ? null : node.status, progress: node.progress, start, end, openEnded });
+      out.push({
+        id,
+        name: node.name,
+        depth,
+        isGroup,
+        status: isGroup ? null : node.status,
+        progress: isGroup ? progressRollup(node, byParent) : node.progress,
+        start,
+        end,
+        openEnded,
+      });
       for (const k of kids) visit(k.id, depth + 1);
     };
     const directChildren = (byParent.get(root.id) ?? []).filter((k) => itemIds.has(k.id));
@@ -2593,6 +2630,7 @@ function TimelineProjectSection({
         root={root}
         count={items.length}
         extent={extent}
+        progress={progressRollup(root, byParent)}
         isCollapsed={isCollapsed}
         toggle={toggle}
         onSelect={onSelect}

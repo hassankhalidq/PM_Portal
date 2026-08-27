@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useClosePopover } from "@/components/ui";
+import { useClosePopover, useFloatingPosition } from "@/components/ui";
 import { ownerColor, ownerInitials } from "@/lib/avatar";
 
 export type ReadoutNodeT = {
@@ -67,7 +68,8 @@ export default function ReadoutBoard({
 }) {
   const [sections, setSections] = useState<Record<SectionKey, boolean>>(DEFAULT_SECTIONS);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const customizeRef = useRef<HTMLDivElement>(null);
+  const customizeTriggerRef = useRef<HTMLButtonElement>(null);
+  const { menuRef: customizeRef, style: customizeStyle } = useFloatingPosition(customizeOpen, customizeTriggerRef);
   useClosePopover(customizeOpen, () => setCustomizeOpen(false), customizeRef);
 
   useEffect(() => {
@@ -152,12 +154,21 @@ export default function ReadoutBoard({
             <p className="max-w-xl text-sm leading-relaxed text-text-muted">{summary}</p>
           </div>
           <div className="readout-noprint flex flex-none items-center gap-2">
-            <div className="relative" ref={customizeRef}>
-              <button type="button" onClick={() => setCustomizeOpen((o) => !o)} className="btn-ghost text-xs">
-                Customize
-              </button>
-              {customizeOpen && (
-                <div className="animate-pop-in absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-surface p-2 shadow-lg">
+            <button
+              ref={customizeTriggerRef}
+              type="button"
+              onClick={() => setCustomizeOpen((o) => !o)}
+              className="btn-ghost text-xs"
+            >
+              Customize
+            </button>
+            {customizeOpen &&
+              createPortal(
+                <div
+                  ref={customizeRef}
+                  style={customizeStyle}
+                  className="animate-pop-in z-30 w-56 rounded-lg border border-border bg-surface p-2 shadow-lg"
+                >
                   <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
                     Show sections
                   </p>
@@ -166,17 +177,13 @@ export default function ReadoutBoard({
                       key={key}
                       className="flex items-center gap-2 rounded-md px-1 py-1.5 text-sm text-text hover:bg-bg"
                     >
-                      <input
-                        type="checkbox"
-                        checked={sections[key]}
-                        onChange={() => toggleSection(key)}
-                      />
+                      <input type="checkbox" checked={sections[key]} onChange={() => toggleSection(key)} />
                       {SECTION_LABELS[key]}
                     </label>
                   ))}
-                </div>
+                </div>,
+                document.body
               )}
-            </div>
             <button type="button" onClick={() => window.print()} className="btn-ghost text-xs">
               Print
             </button>

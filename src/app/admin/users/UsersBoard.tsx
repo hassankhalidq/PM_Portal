@@ -1,8 +1,9 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { createUser, deleteUser, updateUserRole } from "@/lib/actions";
-import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
+import { useClosePopover, useFloatingPosition, ConfirmDeleteButton } from "@/components/ui";
 import { ownerInitials, ownerColor } from "@/lib/avatar";
 
 type Role = "ADMIN" | "INTERNAL";
@@ -114,8 +115,9 @@ function RoleChip({
   const [value, setValue] = useState(user.role);
   useEffect(() => setValue(user.role), [user.role]);
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useClosePopover(open, () => setOpen(false), ref);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { menuRef, style } = useFloatingPosition(open, triggerRef);
+  useClosePopover(open, () => setOpen(false), menuRef);
 
   const pick = (next: Role) => {
     setOpen(false);
@@ -133,8 +135,9 @@ function RoleChip({
   };
 
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Role"
         disabled={pending || lastAdmin}
@@ -148,24 +151,28 @@ function RoleChip({
         {ROLE_META[value].label}
         <span className="text-text-muted">▾</span>
       </button>
-      {open && (
-        <div
-          className="animate-pop-in absolute left-0 top-full z-20 mt-1 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {(Object.keys(ROLE_META) as Role[]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => pick(k)}
-              className={`block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-surface2 ${ROLE_META[k].className}`}
-            >
-              {ROLE_META[k].label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={style}
+            className="animate-pop-in z-20 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(Object.keys(ROLE_META) as Role[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => pick(k)}
+                className={`block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-surface2 ${ROLE_META[k].className}`}
+              >
+                {ROLE_META[k].label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 

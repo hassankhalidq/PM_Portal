@@ -1,7 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
+import { useRef, useState, useTransition } from "react";
+import { useClosePopover, useFloatingPosition } from "@/components/ui";
 
 type Entity = { id: string; name: string; description?: string; isDefault: boolean };
 
@@ -33,7 +35,8 @@ export default function EntitySwitcher({
   const [renameDescription, setRenameDescription] = useState("");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { menuRef, style } = useFloatingPosition(open, triggerRef);
 
   const current = entities.find((e) => e.id === currentId);
 
@@ -44,22 +47,7 @@ export default function EntitySwitcher({
     setError("");
   };
 
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) closeAll();
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeAll();
-    };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useClosePopover(open, closeAll, menuRef);
 
   const select = (id: string) => {
     setOpen(false);
@@ -117,13 +105,20 @@ export default function EntitySwitcher({
   };
 
   return (
-    <div className="relative" ref={ref}>
-      <button className="btn-ghost" onClick={() => setOpen((o) => !o)} aria-haspopup="true" aria-expanded={open}>
+    <>
+      <button
+        ref={triggerRef}
+        className="btn-ghost"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
         {current?.name ?? label}
         <span className="text-text-muted">▾</span>
       </button>
-      {open && (
-        <div className="absolute left-0 top-full z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-2 shadow-lg">
+      {open &&
+        createPortal(
+          <div ref={menuRef} style={style} className="z-30 w-64 rounded-xl border border-border bg-surface p-2 shadow-lg">
           {error && <p className="px-2 pb-1 text-xs text-danger">{error}</p>}
           <div className="max-h-64 space-y-0.5 overflow-y-auto">
             {entities.map((e) => (
@@ -236,8 +231,9 @@ export default function EntitySwitcher({
               </button>
             )}
           </div>
-        </div>
-      )}
-    </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }

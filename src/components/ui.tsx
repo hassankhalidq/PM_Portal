@@ -1,6 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
+// Positions a portal-rendered dropdown against its trigger's measured rect,
+// flipping above/left instead of below/right when there isn't room — fixes
+// dropdowns silently clipping or rendering off-screen when their trigger
+// sits near the bottom (or edge) of a scrolling/overflow-hidden ancestor,
+// since a portal to document.body escapes that ancestor's clipping the same
+// way PreferencesMenu's popover already does. The menu mounts hidden first
+// so its real size can be measured, then repositioned and revealed inside a
+// useLayoutEffect — before paint, so there's no visible jump.
+export function useFloatingPosition(open: boolean, triggerRef: React.RefObject<HTMLElement>) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({ visibility: "hidden" });
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setStyle({ visibility: "hidden" });
+      return;
+    }
+    const trigger = triggerRef.current;
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+    const rect = trigger.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const openUp = spaceBelow < menu.offsetHeight + 8 && spaceAbove > spaceBelow;
+    const spaceRight = window.innerWidth - rect.left;
+    const openLeft = spaceRight < menu.offsetWidth + 8 && rect.right > menu.offsetWidth;
+    setStyle({
+      position: "fixed",
+      ...(openLeft ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+      ...(openUp ? { bottom: window.innerHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
+      visibility: "visible",
+    });
+  }, [open, triggerRef]);
+
+  return { menuRef, style };
+}
 
 export function useClosePopover(open: boolean, onClose: () => void, ref: React.RefObject<HTMLElement>) {
   useEffect(() => {

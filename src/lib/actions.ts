@@ -120,6 +120,15 @@ export async function updateNode(
   }
 ) {
   await requireSession();
+  // A node with children shows a progress rollup, not its own raw field —
+  // the UI never sends `progress` for one, but guard it here too so a
+  // direct call can't silently desync a parent's stored value from what
+  // it's actually displaying.
+  let progress = data.progress;
+  if (progress !== undefined) {
+    const childCount = await prisma.projectNode.count({ where: { parentId: id } });
+    if (childCount > 0) progress = undefined;
+  }
   await prisma.projectNode.update({
     where: { id },
     data: {
@@ -127,9 +136,7 @@ export async function updateNode(
       ...(data.owner !== undefined ? { owner: data.owner.trim() } : {}),
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.priority !== undefined ? { priority: data.priority } : {}),
-      ...(data.progress !== undefined
-        ? { progress: Math.max(0, Math.min(100, Math.round(data.progress))) }
-        : {}),
+      ...(progress !== undefined ? { progress: Math.max(0, Math.min(100, Math.round(progress))) } : {}),
       ...(data.link !== undefined ? { link: data.link.trim() } : {}),
       ...(data.startDate !== undefined
         ? { startDate: data.startDate ? new Date(data.startDate) : null }
