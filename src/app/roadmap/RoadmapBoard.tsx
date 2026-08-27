@@ -22,7 +22,7 @@ import {
 } from "@/lib/actions";
 import EntitySwitcher from "@/components/EntitySwitcher";
 import { ROADMAP_THEMES } from "@/lib/roadmapThemes";
-import { formatDateRange, HoverCardContent, useHoverCard } from "./HoverCard";
+import { formatDateRange, fmtLong, HoverCardContent, useHoverCard } from "./HoverCard";
 import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
 import { MILESTONE_META, MilestoneIcon, type MilestoneType } from "@/lib/milestoneIcons";
 import { getSnapWeeks, SNAP_WEEKS_EVENT } from "@/lib/uiPrefs";
@@ -229,6 +229,11 @@ export default function RoadmapBoard({
       return next;
     });
 
+  const allMilestoneTypes = Object.keys(MILESTONE_META) as MilestoneType[];
+  const allMilestonesHidden = hiddenTypes.size >= allMilestoneTypes.length;
+  const toggleAllMilestones = () =>
+    setHiddenTypes(allMilestonesHidden ? new Set() : new Set(allMilestoneTypes));
+
   const allItems = useMemo(() => categories.flatMap((c) => c.items), [categories]);
 
   const today = useMemo(() => {
@@ -329,6 +334,28 @@ export default function RoadmapBoard({
     if (!el) return;
     el.scrollLeft = Math.max(0, x(today) - containerWidth / 6);
   };
+
+  const panBy = (direction: 1 | -1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft = Math.max(0, el.scrollLeft + direction * containerWidth * 0.8);
+  };
+
+  const stepZoom = (direction: 1 | -1) =>
+    setPxPerDay((p) => Math.max(minPxPerDay, Math.min(32, p + direction * 4)));
+
+  // `drag` is a ref (not reactive) so it can't drive a render on its own —
+  // this only works because `isDragging` (a real state flip) is what
+  // triggers the re-render that reads it, at which point the ref already
+  // holds the just-started drag's id.
+  const dragHint = (() => {
+    if (!isDragging || !drag.current) return null;
+    const id = drag.current.id;
+    const name = allItems.find((i) => i.id === id)?.name ?? milestones.find((m) => m.id === id)?.name;
+    if (!name) return null;
+    const verb = drag.current.kind === "milestone" || drag.current.kind === "item-move" ? "Moving" : "Resizing";
+    return `${verb} ${name}`;
+  })();
 
   const headerSegments = useMemo(() => {
     const segs: { label: string; from: number; to: number; zone: "now" | "later" }[] = [];
@@ -835,20 +862,13 @@ export default function RoadmapBoard({
           🔍 Search
           <span className="figure ml-1 rounded border border-border px-1 text-[10px] text-text-muted">⌘K</span>
         </button>
-        <label className="flex items-center gap-2 text-xs text-text-muted">
-          Zoom
-          <input
-            type="range"
-            min={minPxPerDay}
-            max={32}
-            step={1}
-            value={pxPerDay}
-            onChange={(e) => setPxPerDay(Number(e.target.value))}
-            aria-label="Timeline zoom"
-          />
-        </label>
-        <button className="btn-ghost" onClick={jumpToToday}>
-          Today
+        <button
+          type="button"
+          onClick={toggleAllMilestones}
+          className={`btn-ghost text-xs ${allMilestonesHidden ? "text-text-muted" : "text-accent"}`}
+          title={allMilestonesHidden ? "Show all milestones" : "Hide all milestones"}
+        >
+          ◆ Milestones
         </button>
         <button className="btn-ghost" onClick={() => setPanel({ kind: "lanes" })}>
           Manage lanes
@@ -969,11 +989,69 @@ export default function RoadmapBoard({
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        className="roadmap-content animate-view-in flex-1 overflow-auto"
-        style={{ ["--roadmap-tint" as string]: activeTheme.bgTint }}
-      >
+      <div className="flex-1 overflow-auto p-6">
+        <div className="mb-4 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border2 bg-bg px-3.5 py-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => panBy(-1)}
+                title="Pan back"
+                aria-label="Pan back"
+                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted"
+              >
+                ‹
+              </button>
+              <button type="button" onClick={jumpToToday} className="btn-ghost px-2.5 py-1 text-xs">
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => panBy(1)}
+                title="Pan forward"
+                aria-label="Pan forward"
+                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted"
+              >
+                ›
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              {dragHint && (
+                <span className="figure rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] text-accent">
+                  {dragHint}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => stepZoom(-1)}
+                disabled={pxPerDay <= minPxPerDay}
+                title="Zoom out"
+                aria-label="Zoom out"
+                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted disabled:opacity-40"
+              >
+                −
+              </button>
+              <span className="figure w-16 text-center text-[10px] uppercase tracking-wide text-text-muted">
+                {zoomBand}
+              </span>
+              <button
+                type="button"
+                onClick={() => stepZoom(1)}
+                disabled={pxPerDay >= 32}
+                title="Zoom in"
+                aria-label="Zoom in"
+                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted disabled:opacity-40"
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div
+            ref={scrollRef}
+            className="roadmap-content animate-view-in overflow-auto"
+            style={{ ["--roadmap-tint" as string]: activeTheme.bgTint }}
+          >
         <div className="min-w-full w-max">
           {/* Header rail */}
           <div className="sticky top-0 z-20 flex border-b border-border bg-surface">
@@ -1036,33 +1114,17 @@ export default function RoadmapBoard({
                   laneIdx < categories.length - 1 ? "mb-3" : ""
                 }`}
               >
-                <div
-                  className={`sticky left-0 z-20 flex w-44 shrink-0 items-center gap-1 border-r border-border px-4 hover:brightness-110 ${
-                    hiddenCategories.has(c.id) ? "opacity-50" : ""
-                  } ${
-                    isDragging && dragRowPreview?.categoryId === c.id ? "ring-2 ring-inset ring-white" : ""
-                  }`}
-                  style={{ minHeight: Math.max(56, rowCount * 38 + 22), background: c.color }}
-                >
-                  <button
-                    onClick={() => toggleCategory(c.id)}
-                    title={hiddenCategories.has(c.id) ? "Click to show this lane" : "Click to hide this lane"}
-                    className="min-w-0 flex-1 truncate text-left text-sm font-medium text-white"
-                  >
-                    <span className={hiddenCategories.has(c.id) ? "line-through" : ""}>{c.name}</span>
-                  </button>
-                  <button
-                    aria-label={`Add to ${c.name}`}
-                    title="Add item or milestone to this lane"
-                    onClick={(e) => {
-                      const r = e.currentTarget.getBoundingClientRect();
-                      setAddMenu({ categoryId: c.id, top: r.bottom + 6, left: r.left });
-                    }}
-                    className="grid h-5 w-5 shrink-0 place-items-center rounded text-white/80 hover:bg-white/20"
-                  >
-                    +
-                  </button>
-                </div>
+                <LaneLabelCell
+                  category={c}
+                  minHeight={Math.max(64, rowCount * 38 + 22)}
+                  hidden={hiddenCategories.has(c.id)}
+                  onlyOne={categories.length === 1}
+                  isFirst={laneIdx === 0}
+                  isLast={laneIdx === categories.length - 1}
+                  ring={isDragging && dragRowPreview?.categoryId === c.id}
+                  onToggleVisibility={() => toggleCategory(c.id)}
+                  onAddMenu={(r) => setAddMenu({ categoryId: c.id, top: r.bottom + 6, left: r.left })}
+                />
                 <div
                   className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
                   style={{
@@ -1125,6 +1187,14 @@ export default function RoadmapBoard({
             </div>
           )}
         </div>
+          </div>
+        </div>
+
+        <MilestoneListCard
+          categories={categories}
+          milestones={milestones}
+          onSelect={(id) => setPanel({ kind: "milestone", id })}
+        />
       </div>
 
       {/* Legend */}
@@ -1218,7 +1288,7 @@ function ItemBar({
 }) {
   const hover = useHoverCard(isDragging);
   const left = x(d.start);
-  const w = Math.max(x(d.end + DAY) - left, 14);
+  const w = Math.max(x(d.end + DAY) - left, 44);
 
   return (
     <div
@@ -1228,7 +1298,7 @@ function ItemBar({
       onMouseLeave={hover.onMouseLeave}
     >
       <button
-        className={`absolute top-0 z-10 h-7 w-full cursor-grab touch-none overflow-hidden rounded-full text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing ${
+        className={`absolute top-0 z-10 h-[22px] w-full cursor-grab touch-none overflow-hidden rounded-md text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing ${
           item.stage === "EXPLORING" ? "border border-dashed border-white/60 opacity-75" : ""
         }`}
         style={{ background: row % 2 === 1 ? darken(color, 0.18) : color }}
@@ -1643,6 +1713,172 @@ function MilestoneForm({
         )}
         {milestone && <ConfirmDeleteButton onConfirm={remove} disabled={pending} />}
       </div>
+    </div>
+  );
+}
+
+function LaneLabelCell({
+  category,
+  minHeight,
+  hidden,
+  onlyOne,
+  isFirst,
+  isLast,
+  ring,
+  onToggleVisibility,
+  onAddMenu,
+}: {
+  category: CategoryT;
+  minHeight: number;
+  hidden: boolean;
+  onlyOne: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+  ring: boolean;
+  onToggleVisibility: () => void;
+  onAddMenu: (rect: DOMRect) => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(category.name);
+  const [, start] = useTransition();
+
+  const commitRename = () => {
+    setRenaming(false);
+    if (name.trim() && name !== category.name) start(() => updateCategory(category.id, { name: name.trim() }));
+    else setName(category.name);
+  };
+
+  return (
+    <div
+      className={`sticky left-0 z-20 flex w-44 shrink-0 flex-col justify-center gap-1 border-r border-border px-3 py-2 hover:brightness-110 ${
+        hidden ? "opacity-50" : ""
+      } ${ring ? "ring-2 ring-inset ring-white" : ""}`}
+      style={{ minHeight, background: category.color }}
+    >
+      <div className="flex items-center gap-1">
+        {renaming ? (
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                setName(category.name);
+                setRenaming(false);
+              }
+            }}
+            className="min-w-0 flex-1 rounded border border-white/50 bg-black/20 px-1 py-0.5 text-sm font-medium text-white outline-none"
+          />
+        ) : (
+          <button
+            onClick={onToggleVisibility}
+            title={hidden ? "Click to show this lane" : "Click to hide this lane"}
+            className="min-w-0 flex-1 truncate text-left text-sm font-medium text-white"
+          >
+            <span className={hidden ? "line-through" : ""}>{category.name}</span>
+          </button>
+        )}
+        <button
+          aria-label={`Rename ${category.name}`}
+          title="Rename lane"
+          onClick={() => setRenaming(true)}
+          className="grid h-5 w-5 shrink-0 place-items-center rounded text-[11px] text-white/70 hover:bg-white/20"
+        >
+          ✎
+        </button>
+        <button
+          aria-label={`Add to ${category.name}`}
+          title="Add item or milestone to this lane"
+          onClick={(e) => onAddMenu(e.currentTarget.getBoundingClientRect())}
+          className="grid h-5 w-5 shrink-0 place-items-center rounded text-white/80 hover:bg-white/20"
+        >
+          +
+        </button>
+      </div>
+      <div className="flex items-center gap-0.5">
+        <button
+          aria-label="Move lane up"
+          title="Move lane up"
+          disabled={isFirst}
+          onClick={() => start(() => moveCategory(category.id, "up"))}
+          className="grid h-5 w-5 shrink-0 place-items-center rounded text-[10px] text-white/70 hover:bg-white/20 disabled:opacity-30"
+        >
+          ▲
+        </button>
+        <button
+          aria-label="Move lane down"
+          title="Move lane down"
+          disabled={isLast}
+          onClick={() => start(() => moveCategory(category.id, "down"))}
+          className="grid h-5 w-5 shrink-0 place-items-center rounded text-[10px] text-white/70 hover:bg-white/20 disabled:opacity-30"
+        >
+          ▼
+        </button>
+        <ConfirmDeleteButton
+          variant="icon"
+          label="✕"
+          disabled={onlyOne}
+          title={onlyOne ? "At least one lane must exist" : "Remove lane and its items"}
+          ariaLabel={`Remove ${category.name}`}
+          onConfirm={() => start(() => deleteCategory(category.id))}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MilestoneListCard({
+  categories,
+  milestones,
+  onSelect,
+}: {
+  categories: CategoryT[];
+  milestones: MilestoneT[];
+  onSelect: (id: string) => void;
+}) {
+  const laneById = new Map(categories.map((c) => [c.id, c]));
+  const rollup = (Object.keys(MILESTONE_META) as MilestoneType[])
+    .map((t) => ({ type: t, count: milestones.filter((m) => m.type === t).length }))
+    .filter((r) => r.count > 0);
+  const sorted = [...milestones].sort((a, b) => a.date.localeCompare(b.date));
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border2 px-4 py-3">
+        <span className="text-sm font-semibold">Milestones</span>
+        <div className="flex flex-wrap items-center gap-3">
+          {rollup.map((r) => (
+            <span key={r.type} className="flex items-center gap-1.5 text-xs text-text-muted">
+              <MilestoneIcon type={r.type} size={11} />
+              {MILESTONE_META[r.type].label}
+              <span className="figure text-text">{r.count}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+      {sorted.length === 0 && <p className="px-4 py-3 text-sm text-text-muted">No milestones yet.</p>}
+      {sorted.map((m) => {
+        const lane = laneById.get(m.categoryId);
+        return (
+          <button
+            key={m.id}
+            onClick={() => onSelect(m.id)}
+            className="flex w-full items-center gap-3 border-b border-border2 px-4 py-2.5 text-left last:border-b-0 hover:bg-bg"
+          >
+            <MilestoneIcon type={m.type} size={13} />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{m.name}</span>
+            {lane && (
+              <span className="flex flex-none items-center gap-1.5 text-xs text-text-muted">
+                <span className="h-1.5 w-1.5 rounded-sm" style={{ background: lane.color }} />
+                {lane.name}
+              </span>
+            )}
+            <span className="figure flex-none text-xs text-text-muted">{fmtLong(m.date)}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

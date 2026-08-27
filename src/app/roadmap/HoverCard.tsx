@@ -33,7 +33,7 @@ export function useHoverCard(disabled: boolean) {
 function fmtShort(d: string) {
   return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" });
 }
-function fmtLong(d: string) {
+export function fmtLong(d: string) {
   return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", {
     day: "2-digit",
     month: "short",
