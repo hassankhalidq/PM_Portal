@@ -1,10 +1,22 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { createUser, deleteUser, updateUserRole } from "@/lib/actions";
+import { useClosePopover, ConfirmDeleteButton } from "@/components/ui";
+import { ownerInitials, ownerColor } from "@/lib/avatar";
 
 type Role = "ADMIN" | "INTERNAL";
 type UserT = { id: string; email: string; name: string; role: Role; createdAt: string };
+
+const ROLE_META: Record<Role, { label: string; className: string }> = {
+  ADMIN: { label: "Admin", className: "text-accent" },
+  INTERNAL: { label: "Internal", className: "text-text-muted" },
+};
+
+const ROLE_LEGEND: { role: Role; detail: string }[] = [
+  { role: "ADMIN", detail: "Full control: manage users and roles, and access every board and roadmap." },
+  { role: "INTERNAL", detail: "Create and edit items across boards and roadmaps. Cannot manage users." },
+];
 
 function fmtDate(d: string) {
   return new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
@@ -20,15 +32,8 @@ export default function UsersBoard({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const admins = users.filter((u) => u.role === "ADMIN").length;
-
-  useEffect(() => {
-    if (!creating) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setCreating(false);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [creating]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useClosePopover(creating, () => setCreating(false), dialogRef);
 
   return (
     <div className="flex h-screen flex-col">
@@ -43,10 +48,10 @@ export default function UsersBoard({
           Add user
         </button>
       </header>
-      <div className="flex-1 overflow-auto px-6 py-5">
+      <div className="animate-view-in flex-1 overflow-auto px-6 py-5">
         {error && <p className="mb-3 text-sm text-danger">{error}</p>}
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-          <div className="grid grid-cols-[1fr_1fr_140px_100px_44px] border-b border-border bg-bg px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+          <div className="grid grid-cols-[1fr_1fr_140px_100px_44px] border-b border-border bg-bg px-4 py-2 font-mono text-[11px] font-semibold uppercase tracking-wider text-text-muted">
             <span>Name</span>
             <span>Email</span>
             <span>Role</span>
@@ -63,22 +68,101 @@ export default function UsersBoard({
             />
           ))}
         </div>
+
+        <div className="mt-4 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+          <div className="border-b border-border2 px-4 py-3 text-[13.5px] font-semibold">What each role can do</div>
+          {ROLE_LEGEND.map((rl) => (
+            <div key={rl.role} className="flex gap-3 border-b border-border2 px-4 py-2.5 last:border-b-0">
+              <span
+                className={`figure w-16 shrink-0 pt-0.5 text-[9.5px] font-semibold uppercase tracking-wider ${ROLE_META[rl.role].className}`}
+              >
+                {ROLE_META[rl.role].label}
+              </span>
+              <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-text-muted">{rl.detail}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {creating && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
-          onClick={() => setCreating(false)}
-        >
+        <div className="animate-overlay-in fixed inset-0 z-[100] flex items-center justify-center bg-black/40">
           <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="add-user-title"
-            className="w-full max-w-[440px] rounded-2xl bg-surface shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            className="animate-pop-in w-full max-w-[440px] rounded-2xl bg-surface shadow-2xl"
           >
             <NewUserForm onDone={() => setCreating(false)} onError={setError} />
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RoleChip({
+  user,
+  lastAdmin,
+  onError,
+}: {
+  user: UserT;
+  lastAdmin: boolean;
+  onError: (s: string) => void;
+}) {
+  const [pending, start] = useTransition();
+  const [value, setValue] = useState(user.role);
+  useEffect(() => setValue(user.role), [user.role]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useClosePopover(open, () => setOpen(false), ref);
+
+  const pick = (next: Role) => {
+    setOpen(false);
+    onError("");
+    const prev = value;
+    setValue(next);
+    start(async () => {
+      try {
+        await updateUserRole(user.id, next);
+      } catch (err) {
+        setValue(prev);
+        onError(err instanceof Error ? err.message : "Failed to update role.");
+      }
+    });
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        aria-label="Role"
+        disabled={pending || lastAdmin}
+        title={lastAdmin ? "At least one admin must remain" : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className={`focus-ring flex w-28 items-center justify-between gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:border-accent/40 disabled:opacity-60 disabled:hover:border-border ${ROLE_META[value].className}`}
+      >
+        {ROLE_META[value].label}
+        <span className="text-text-muted">▾</span>
+      </button>
+      {open && (
+        <div
+          className="animate-pop-in absolute left-0 top-full z-20 mt-1 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(Object.keys(ROLE_META) as Role[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => pick(k)}
+              className={`block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-surface2 ${ROLE_META[k].className}`}
+            >
+              {ROLE_META[k].label}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -98,59 +182,48 @@ function UserRow({
 }) {
   const [pending, start] = useTransition();
 
+  const remove = () => {
+    onError("");
+    start(async () => {
+      try {
+        await deleteUser(user.id);
+      } catch (err) {
+        onError(err instanceof Error ? err.message : "Failed to delete user.");
+      }
+    });
+  };
+
   return (
     <div className="grid grid-cols-[1fr_1fr_140px_100px_44px] items-center border-b border-border/70 px-4 py-2.5 last:border-b-0">
-      <span className="truncate text-sm font-medium">
-        {user.name} {isSelf && <span className="text-xs text-text-muted">(you)</span>}
-      </span>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span
+          className="figure flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+          style={{ background: ownerColor(user.name) }}
+        >
+          {ownerInitials(user.name)}
+        </span>
+        <span className="truncate text-sm font-medium">
+          {user.name} {isSelf && <span className="text-xs text-text-muted">(you)</span>}
+        </span>
+      </div>
       <span className="truncate text-sm text-text-muted">{user.email}</span>
-      <select
-        aria-label="Role"
-        className="field w-32 text-xs"
-        value={user.role}
-        disabled={pending || lastAdmin}
-        title={lastAdmin ? "At least one admin must remain" : undefined}
-        onChange={(e) => {
-          onError("");
-          const role = e.target.value as Role;
-          start(async () => {
-            try {
-              await updateUserRole(user.id, role);
-            } catch (err) {
-              onError(err instanceof Error ? err.message : "Failed to update role.");
-            }
-          });
-        }}
-      >
-        <option value="ADMIN">Admin</option>
-        <option value="INTERNAL">Internal</option>
-      </select>
+      <RoleChip user={user} lastAdmin={lastAdmin} onError={onError} />
       <span className="figure text-xs text-text-muted">{fmtDate(user.createdAt)}</span>
-      <button
-        aria-label="Delete user"
-        className="btn-ghost h-7 w-7 justify-center p-0 text-danger"
-        disabled={pending || isSelf || lastAdmin}
-        title={
-          isSelf
-            ? "You cannot delete your own account"
-            : lastAdmin
-              ? "At least one admin must remain"
-              : "Delete user"
-        }
-        onClick={() => {
-          if (!confirm(`Delete ${user.name}? Their comments will also be removed.`)) return;
-          onError("");
-          start(async () => {
-            try {
-              await deleteUser(user.id);
-            } catch (err) {
-              onError(err instanceof Error ? err.message : "Failed to delete user.");
-            }
-          });
-        }}
-      >
-        ✕
-      </button>
+      <div className="flex justify-end">
+        <ConfirmDeleteButton
+          variant="icon"
+          label="✕"
+          onConfirm={remove}
+          disabled={pending || isSelf || lastAdmin}
+          title={
+            isSelf
+              ? "You cannot delete your own account"
+              : lastAdmin
+                ? "At least one admin must remain"
+                : "Delete user"
+          }
+        />
+      </div>
     </div>
   );
 }
@@ -219,14 +292,20 @@ function NewUserForm({ onDone, onError }: { onDone: () => void; onError: (s: str
         </div>
         <div>
           <label className="mb-1 block text-[13px] font-medium">Role</label>
-          <select
-            className="field"
-            value={form.role}
-            onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
-          >
-            <option value="INTERNAL">Internal</option>
-            <option value="ADMIN">Admin</option>
-          </select>
+          <div className="flex gap-2">
+            {(["INTERNAL", "ADMIN"] as Role[]).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setForm({ ...form, role: r })}
+                className={`rounded-full border px-3 py-1.5 text-sm ${
+                  form.role === r ? "border-accent bg-accent/10 text-accent" : "border-border text-text-muted"
+                }`}
+              >
+                {ROLE_META[r].label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <div className="flex justify-end gap-2 border-t border-border px-5 py-4">

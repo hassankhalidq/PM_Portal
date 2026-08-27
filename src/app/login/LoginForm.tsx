@@ -21,7 +21,7 @@ export default function LoginForm() {
         <label htmlFor="email" className="mb-1 block text-sm font-medium">
           Email
         </label>
-        <input id="email" name="email" type="email" required autoComplete="email" className="field" />
+        <input id="email" name="email" type="email" required autoFocus autoComplete="email" className="field" />
       </div>
       <div>
         <label htmlFor="password" className="mb-1 block text-sm font-medium">
@@ -36,7 +36,9 @@ export default function LoginForm() {
           className="field"
         />
       </div>
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+      ) : null}
       <SubmitButton />
     </form>
   );
