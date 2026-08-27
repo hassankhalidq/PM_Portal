@@ -261,19 +261,23 @@ export default function ProjectBoard({
   dependencies: DependencyT[];
   weeklyStatuses: WeeklyStatusT[];
 }) {
-  const [view, setView] = useState<"table" | "kanban" | "timeline" | "log" | "weekly">("table");
+  const searchParams = useSearchParams();
+  const savedView = searchParams.get("saved");
+
+  const [view, setView] = useState<"table" | "kanban" | "timeline" | "log" | "weekly">(() => {
+    const v = searchParams.get("view");
+    return v === "kanban" || v === "timeline" || v === "log" || v === "weekly" ? v : "table";
+  });
   const [filters, setFilters] = useState({ owner: "", status: "", priority: "" });
   const [datesAtRiskOnly, setDatesAtRiskOnly] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get("item"));
   const [creatingRoot, setCreatingRoot] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
   const [colWidths, setColWidths] = useState<Record<ColumnKey, number>>(DEFAULT_WIDTHS);
   const [timelinePxPerDay, setTimelinePxPerDay] = useState(6);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [, startBulk] = useTransition();
-  const searchParams = useSearchParams();
-  const savedView = searchParams.get("saved");
 
   const [showKpis, setShowKpisState] = useState(true);
   const [density, setDensityState] = useState<Density>("comfortable");

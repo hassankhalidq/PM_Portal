@@ -5,14 +5,6 @@ import DashboardBoard from "./DashboardBoard";
 
 export const dynamic = "force-dynamic";
 
-const MILESTONE_COLORS: Record<string, string> = {
-  RELEASE: "#D97706",
-  LAUNCH: "#16A34A",
-  DEADLINE: "#DC2626",
-  CHECKPOINT: "#2563EB",
-  DEPRECATION: "#71717A",
-};
-
 export default async function DashboardPage() {
   const session = await auth();
   const role = (session?.user as { role?: string } | undefined)?.role;
@@ -24,18 +16,34 @@ export default async function DashboardPage() {
   const boardIds = boards.map((b) => b.id);
   const roadmapIds = roadmaps.map((r) => r.id);
 
-  const [nodes, categories, milestones] = await Promise.all([
+  const [nodes, categories, milestones, logEntries] = await Promise.all([
     prisma.projectNode.findMany({
       where: { boardId: { in: boardIds } },
-      select: { boardId: true, parentId: true, status: true, progress: true, endDate: true },
+      select: {
+        id: true,
+        name: true,
+        owner: true,
+        boardId: true,
+        parentId: true,
+        status: true,
+        progress: true,
+        startDate: true,
+        endDate: true,
+      },
     }),
     prisma.category.findMany({
       where: { roadmapId: { in: roadmapIds } },
-      select: { id: true, roadmapId: true },
+      select: { id: true, roadmapId: true, name: true, color: true },
     }),
     prisma.milestone.findMany({
       where: { roadmapId: { in: roadmapIds }, date: { gte: new Date() } },
       orderBy: { date: "asc" },
+    }),
+    prisma.logEntry.findMany({
+      where: { node: { boardId: { in: boardIds } } },
+      select: { date: true, activity: true, node: { select: { boardId: true } } },
+      orderBy: { date: "desc" },
+      take: 50,
     }),
   ]);
   const categoryIds = categories.map((c) => c.id);
@@ -77,20 +85,45 @@ export default async function DashboardPage() {
       description: r.description,
       laneCount: cats.length,
       itemCount,
+      lanes: cats.map((c) => ({
+        name: c.name,
+        color: c.color,
+        count: items.filter((i) => i.categoryId === c.id).length,
+      })),
       milestones: milestones
         .filter((m) => m.roadmapId === r.id)
         .slice(0, 4)
         .map((m) => ({
           name: m.name,
           date: m.date.toISOString().slice(0, 10),
-          color: MILESTONE_COLORS[m.type] ?? "#71717A",
+          type: m.type,
         })),
     };
   });
 
+  const attentionNodes = nodes
+    .filter((n) => n.boardId)
+    .map((n) => ({
+      id: n.id,
+      name: n.name,
+      owner: n.owner,
+      boardId: n.boardId as string,
+      parentId: n.parentId,
+      status: n.status,
+      startDate: n.startDate ? n.startDate.toISOString().slice(0, 10) : null,
+    }));
+
+  const logs = logEntries
+    .filter((l) => l.node.boardId)
+    .map((l) => ({
+      date: l.date.toISOString().slice(0, 10),
+      activity: l.activity,
+      boardId: l.node.boardId as string,
+    }));
+
   return (
     <Shell active="dashboard" userName={session?.user?.name ?? ""} role={role}>
-      <DashboardBoard boards={boardStats} roadmaps={roadmapStats} />
+      <DashboardBoard boards={boardStats} roadmaps={roadmapStats} nodes={attentionNodes} logs={logs} />
     </Shell>
   );
 }
