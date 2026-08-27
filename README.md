@@ -1,4 +1,4 @@
-# SahulatPay PM Portal
+# Vyro
 
 Internal two-board tool: a **Project board** (recursive project breakdown, monday.com-style) and a **Roadmap board** (swimlane timeline with milestones, Roadmunk-style). Both sit behind a login. The boards are intentionally independent and share no data model.
 

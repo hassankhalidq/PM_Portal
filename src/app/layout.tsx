@@ -4,7 +4,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Huzzah PM Portal",
+  title: "Vyro",
   description: "Project delivery and product roadmap boards",
 };
 

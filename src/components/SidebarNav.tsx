@@ -155,18 +155,12 @@ export default function SidebarNav({
 
       <aside className="flex h-full flex-col overflow-hidden border-r border-border bg-surface">
         <div className="flex items-center gap-3 border-b border-border px-4 py-5">
-          <span
-            className={`shrink-0 overflow-hidden text-lg font-bold text-accent ${TRANSITION}`}
-            style={{ maxWidth: collapsed ? 24 : 0, opacity: collapsed ? 1 : 0 }}
-          >
-            H
-          </span>
+          <img src="/vyro-mark.png" alt="Vyro" className="h-6 w-6 shrink-0 object-contain" />
           <div
             className={`min-w-0 overflow-hidden whitespace-nowrap ${TRANSITION}`}
             style={{ maxWidth: collapsed ? 0 : 160, opacity: collapsed ? 0 : 1 }}
           >
-            <p className="truncate text-lg font-semibold leading-tight text-accent">Huzzah</p>
-            <p className="text-xs font-medium uppercase tracking-widest text-text-muted">PM Portal</p>
+            <p className="truncate text-lg font-semibold leading-tight text-accent">Vyro</p>
           </div>
         </div>
 
