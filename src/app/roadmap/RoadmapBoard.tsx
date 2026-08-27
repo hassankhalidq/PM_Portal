@@ -1011,6 +1011,20 @@ export default function RoadmapBoard({
           {/* Category swimlanes — items and milestones share one stack, packed compactly by date */}
           {categories.map((c, laneIdx) => {
             const { packed, rowCount } = packedByLane.get(c.id) ?? { packed: [], rowCount: 0 };
+            // Lanes clip their own content by default so items can never visually
+            // bleed into a neighboring lane (there's no `height` cap otherwise —
+            // only `minHeight` — so anything positioned past a lane's own row
+            // count would paint straight into the lane below/above it). The one
+            // exception: while this lane's own item is being drag-previewed into
+            // a *different* lane, `top` is deliberately computed outside this
+            // box (see previewTopOffset above) so the preview can show in the
+            // target lane's row without re-parenting the dragged DOM node —
+            // clipping would hide that preview, so overflow opens up just then.
+            const previewingIntoAnotherLane =
+              isDragging &&
+              !!dragRowPreview &&
+              dragRowPreview.categoryId !== c.id &&
+              packed.some((entry) => entry.entry.id === dragRowPreview.id);
             return (
               <div
                 key={c.id}
@@ -1023,7 +1037,7 @@ export default function RoadmapBoard({
                 }`}
               >
                 <div
-                  className={`sticky left-0 z-10 flex w-44 shrink-0 items-center gap-1 border-r border-border px-4 hover:brightness-110 ${
+                  className={`sticky left-0 z-20 flex w-44 shrink-0 items-center gap-1 border-r border-border px-4 hover:brightness-110 ${
                     hiddenCategories.has(c.id) ? "opacity-50" : ""
                   } ${
                     isDragging && dragRowPreview?.categoryId === c.id ? "ring-2 ring-inset ring-white" : ""
@@ -1051,7 +1065,11 @@ export default function RoadmapBoard({
                 </div>
                 <div
                   className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
-                  style={{ width, minHeight: Math.max(56, rowCount * 38 + 22) }}
+                  style={{
+                    width,
+                    minHeight: Math.max(56, rowCount * 38 + 22),
+                    overflow: previewingIntoAnotherLane ? "visible" : "hidden",
+                  }}
                 >
                   <GridLines segments={headerSegments} x={x} />
                   {zoomBand === "mixed" && (

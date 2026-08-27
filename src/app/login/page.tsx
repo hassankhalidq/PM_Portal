@@ -4,9 +4,9 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="animate-view-in w-full max-w-md">
-        <div className="mb-8 flex flex-col items-center gap-3 text-center">
-          <img src="/vyro-mark.png" alt="Vyro" className="h-12 w-12 object-contain" />
-          <p className="text-2xl font-semibold text-accent">Vyro</p>
+        <div className="mb-10 flex flex-col items-center gap-4 text-center">
+          <img src="/vyro-mark.png" alt="Vyro" className="h-20 w-20 object-contain" />
+          <p className="text-4xl font-semibold tracking-tight text-accent">Vyro</p>
         </div>
         <div className="rounded-2xl border border-border bg-surface p-6 shadow-sm">
           <h1 className="mb-4 text-lg font-semibold">Sign in</h1>
