@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -672,6 +673,9 @@ export default function ProjectBoard({
           🔍 Search
           <span className="figure ml-1 rounded border border-border px-1 text-[10px] text-text-muted">⌘K</span>
         </button>
+        <Link href={`/projects/readout?board=${currentBoardId}`} className="btn-ghost text-xs text-text-muted">
+          Read-out
+        </Link>
         {alertsOn && (
           <div className="relative" ref={notifRef}>
             <button

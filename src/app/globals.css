@@ -149,6 +149,13 @@ body {
   @apply font-mono tabular-nums;
 }
 
+@media print {
+  aside,
+  .readout-noprint {
+    display: none !important;
+  }
+}
+
 .roadmap-content {
   background-color: var(--roadmap-tint, var(--bg));
 }
