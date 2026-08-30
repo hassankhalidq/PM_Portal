@@ -156,7 +156,7 @@ function RoleChip({
           <div
             ref={menuRef}
             style={style}
-            className="animate-pop-in z-20 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            className="animate-pop-in z-20 w-28 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             {(Object.keys(ROLE_META) as Role[]).map((k) => (

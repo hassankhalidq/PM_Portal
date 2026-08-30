@@ -167,7 +167,7 @@ export default function ReadoutBoard({
                 <div
                   ref={customizeRef}
                   style={customizeStyle}
-                  className="animate-pop-in z-30 w-56 rounded-lg border border-border bg-surface p-2 shadow-lg"
+                  className="animate-pop-in z-30 w-56 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
                 >
                   <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
                     Show sections
@@ -214,13 +214,13 @@ export default function ReadoutBoard({
         {sections.progress && (
           <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
             <div className="border-b border-border2 px-4 py-3 text-sm font-semibold">Progress by project</div>
-            {roots.length === 0 && <p className="px-4 py-3 text-sm text-text-muted">No projects on this board.</p>}
+            {roots.length === 0 && <p className="px-4 py-5 text-sm text-text-muted">No projects on this board.</p>}
             {roots.map((r) => {
               const track = trackFor(r);
               return (
                 <div
                   key={r.id}
-                  className="grid grid-cols-[1fr_120px_1fr_90px_140px] items-center gap-3 border-b border-border2 px-4 py-3 last:border-b-0"
+                  className="grid grid-cols-[1fr_120px_1fr_90px_140px] items-center gap-3 border-b border-border2 px-4 py-2.5 last:border-b-0"
                 >
                   <span className="truncate text-sm font-medium">{r.name}</span>
                   <span className="flex items-center gap-1.5 text-xs text-text-muted">
@@ -256,10 +256,10 @@ export default function ReadoutBoard({
                   <span className="figure text-xs text-text-muted">{blockedNodes.length}</span>
                 </div>
                 {blockedNodes.length === 0 && (
-                  <p className="px-4 py-3 text-sm text-text-muted">Nothing blocked.</p>
+                  <p className="px-4 py-5 text-sm text-text-muted">Nothing blocked.</p>
                 )}
                 {blockedNodes.map((b) => (
-                  <div key={b.id} className="flex flex-col gap-1.5 border-b border-border2 px-4 py-3 last:border-b-0">
+                  <div key={b.id} className="flex flex-col gap-1.5 border-b border-border2 px-4 py-2.5 last:border-b-0">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-medium">{b.name}</span>
                       <span className="flex flex-none items-center gap-1.5">
@@ -291,7 +291,7 @@ export default function ReadoutBoard({
                   <span className="figure text-xs text-text-muted">{shippedNodes.length}</span>
                 </div>
                 {shippedNodes.length === 0 && (
-                  <p className="px-4 py-3 text-sm text-text-muted">Nothing shipped in the last 7 days.</p>
+                  <p className="px-4 py-5 text-sm text-text-muted">Nothing shipped in the last 7 days.</p>
                 )}
                 {shippedNodes.map((s) => (
                   <div key={s.id} className="flex items-center justify-between gap-3 border-b border-border2 px-4 py-2.5 last:border-b-0">
@@ -307,13 +307,13 @@ export default function ReadoutBoard({
         {sections.atRisk && (
           <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
             <div className="border-b border-border2 px-4 py-3 text-sm font-semibold">Dates at risk</div>
-            {atRiskNodes.length === 0 && <p className="px-4 py-3 text-sm text-text-muted">Nothing overdue.</p>}
+            {atRiskNodes.length === 0 && <p className="px-4 py-5 text-sm text-text-muted">Nothing overdue.</p>}
             {atRiskNodes.map((n) => {
               const days = Math.floor((today.getTime() - new Date(n.startDate as string).getTime()) / (24 * 60 * 60 * 1000));
               return (
                 <div
                   key={n.id}
-                  className="grid grid-cols-[1fr_140px_120px] items-center gap-3 border-b border-border2 px-4 py-3 last:border-b-0"
+                  className="grid grid-cols-[1fr_140px_120px] items-center gap-3 border-b border-border2 px-4 py-2.5 last:border-b-0"
                 >
                   <span className="truncate text-sm font-medium">{n.name}</span>
                   <span className="text-xs text-text-muted">{n.owner || "Unassigned"}</span>

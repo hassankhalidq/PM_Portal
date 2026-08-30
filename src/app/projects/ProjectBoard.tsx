@@ -1165,7 +1165,7 @@ function StatusChip({ node }: { node: NodeT }) {
           <div
             ref={menuRef}
             style={style}
-            className="animate-pop-in z-20 w-36 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            className="animate-pop-in z-20 w-36 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             {(Object.keys(STATUS_META) as NodeT["status"][]).map((k) => (
@@ -1230,7 +1230,7 @@ function PriorityChip({ node }: { node: NodeT }) {
           <div
             ref={menuRef}
             style={style}
-            className="animate-pop-in z-20 w-28 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            className="animate-pop-in z-20 w-28 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             {(Object.keys(PRIORITY_META) as NodeT["priority"][]).map((k) => (
@@ -2301,7 +2301,22 @@ function KanbanProjectSection({
   );
 }
 
-const TIMELINE_ROW_HEIGHT = 32;
+const TIMELINE_ROW_HEIGHT = 34;
+const TIMELINE_BAR_HEIGHT = 21;
+
+// Soft/tinted fills for Gantt bars specifically — the reference's Timeline
+// uses pastel status fills with matching-tone text and border, distinct from
+// the solid saturated STATUS_META used for the Table/Kanban status pills.
+const TIMELINE_BAR_META: Record<NodeT["status"], { bg: string; border: string; text: string }> = {
+  NOT_STARTED: { bg: "bg-text-muted/10", border: "border-text-muted/30", text: "text-text-muted" },
+  IN_PROGRESS: { bg: "bg-info/10", border: "border-info/30", text: "text-info" },
+  BLOCKED: { bg: "bg-danger/10", border: "border-danger/30", text: "text-danger" },
+  DONE: { bg: "bg-success/10", border: "border-success/30", text: "text-success" },
+};
+
+function fmtGanttDate(d: Date) {
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
 
 type GanttRow = {
   id: string;
@@ -2427,7 +2442,7 @@ function TimelineBoard({
   }
 
   return (
-    <div className="animate-view-in flex-1 space-y-4 overflow-y-auto px-6 py-5">
+    <div className="animate-view-in flex-1 space-y-[14px] overflow-y-auto px-6 pb-10 pt-[18px]">
       {roots.map((root) => (
         <TimelineProjectSection
           key={root.id}
@@ -2554,9 +2569,9 @@ function TimelineProjectSection({
       if (!r.start || !r.end) return;
       const left = Math.max(0, dayOffset(r.start)) * pxPerDay;
       const right = Math.min(totalDays, dayOffset(r.end)) * pxPerDay;
-      const width = Math.max(6, right - left);
-      const top = i * TIMELINE_ROW_HEIGHT + (r.isGroup ? 11 : 5);
-      const height = r.isGroup ? 10 : TIMELINE_ROW_HEIGHT - 10;
+      const width = Math.max(34, right - left);
+      const top = i * TIMELINE_ROW_HEIGHT + Math.round((TIMELINE_ROW_HEIGHT - TIMELINE_BAR_HEIGHT) / 2);
+      const height = TIMELINE_BAR_HEIGHT;
       map.set(r.id, { left, width, top, height });
     });
     return map;
@@ -2641,13 +2656,15 @@ function TimelineProjectSection({
       {!isCollapsed && rows.length > 0 && (
         <div className="overflow-auto">
           {depError && <p className="px-4 pt-3 text-sm text-danger">{depError}</p>}
-          <div className="flex" style={{ width: 280 + chartWidth }}>
-            <div className="w-[280px] shrink-0">
-              <div className="h-9 border-b border-border" />
+          <div className="flex" style={{ width: 210 + chartWidth }}>
+            <div className="w-[210px] shrink-0">
+              <div className="flex h-8 items-center border-b border-border px-3.5 font-mono text-[9px] uppercase tracking-[0.15em] text-text-muted">
+                Item
+              </div>
               {rows.map((r) => (
             <div
               key={r.id}
-              className="flex items-center gap-2 border-b border-border/70"
+              className="flex items-center gap-2 hover:bg-bg"
               style={{ height: TIMELINE_ROW_HEIGHT, paddingLeft: 12 + r.depth * 18 }}
             >
               {!r.isGroup && (
@@ -2670,11 +2687,11 @@ function TimelineProjectSection({
         </div>
 
         <div className="relative flex-1" style={{ width: chartWidth }}>
-          <div className="sticky top-0 z-10 flex h-9 border-b border-border bg-surface">
+          <div className="sticky top-0 z-10 flex h-8 border-b border-border bg-surface">
             {monthHeaders.map((m, i) => (
               <div
                 key={i}
-                className="absolute top-0 flex h-full items-center border-r border-border px-2 font-mono text-xs text-text-muted"
+                className="absolute top-0 flex h-full items-center justify-center border-l border-border font-mono text-[9.5px] tracking-[0.08em] text-text-muted"
                 style={{ left: m.left, width: m.width }}
               >
                 {m.label}
@@ -2733,9 +2750,13 @@ function TimelineProjectSection({
                   <button
                     onClick={() => onSelect(r.id)}
                     title={r.openEnded ? `${r.name} (no end date set — shown through today)` : r.name}
-                    className={`absolute inset-0 overflow-hidden text-left text-[11px] font-medium text-white ${
-                      r.isGroup ? "rounded-full bg-slate-700" : r.status ? STATUS_META[r.status].bg : "bg-text-muted"
-                    } ${!r.isGroup && r.openEnded ? "rounded-l-full" : !r.isGroup ? "rounded-full" : ""}`}
+                    className={`absolute inset-0 overflow-hidden rounded-[7px] border text-left text-[11px] font-medium ${
+                      r.isGroup
+                        ? "border-border bg-surface2 text-text"
+                        : r.status
+                          ? `${TIMELINE_BAR_META[r.status].bg} ${TIMELINE_BAR_META[r.status].border} ${TIMELINE_BAR_META[r.status].text}`
+                          : "border-text-muted/30 bg-text-muted/10 text-text-muted"
+                    }`}
                     style={
                       r.openEnded
                         ? {
@@ -2745,14 +2766,8 @@ function TimelineProjectSection({
                         : undefined
                     }
                   >
-                    {!r.isGroup && (
-                      <span
-                        className="absolute inset-y-0 left-0 rounded-full bg-black/25"
-                        style={{ width: `${Math.max(0, Math.min(100, r.progress))}%` }}
-                      />
-                    )}
                     <span className="relative flex h-full items-center overflow-hidden text-ellipsis whitespace-nowrap px-2.5">
-                      {r.name}
+                      {r.start && (r.openEnded ? `${fmtGanttDate(r.start)} → open` : r.end ? `${fmtGanttDate(r.start)} → ${fmtGanttDate(r.end)}` : fmtGanttDate(r.start))}
                     </span>
                   </button>
                   {!r.isGroup && (
@@ -2978,7 +2993,7 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
         </div>
 
         <div
-          className="grid items-center gap-2 border-x border-b border-border bg-accent/5 p-2"
+          className="grid items-center gap-2 border-x border-b border-border bg-accent/5 px-3 py-2"
           style={{ gridTemplateColumns: LOG_GRID }}
         >
           <input
@@ -3059,7 +3074,7 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
             ) : editingId === row.entry.id ? (
               <div
                 key={row.entry.id}
-                className={`grid items-center gap-2 border-x border-b border-border bg-accent/5 p-2 ${
+                className={`grid items-center gap-2 border-x border-b border-border bg-accent/5 px-3 py-2 ${
                   idx === rows.length - 1 ? "rounded-b-lg" : ""
                 }`}
                 style={{ gridTemplateColumns: LOG_GRID }}

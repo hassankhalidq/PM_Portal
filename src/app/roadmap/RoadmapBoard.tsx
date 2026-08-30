@@ -56,8 +56,13 @@ type LaneEntry =
 const DAY = 86400000;
 const HALF_DAY = DAY / 2;
 const MAX_ZOOM_OUT_DAYS = 546; // 6 quarters (91 days each)
-const ROW_HEIGHT = 38;
-const ROW_TOP = 12;
+const ROW_HEIGHT = 30;
+const ROW_TOP = 10;
+// Matches the reference's lane-height formula exactly: a lane is always at
+// least tall enough for one row (rowCount floored at 1), plus a fixed 12px
+// of breathing room — never a function of ROW_HEIGHT alone, so this stays a
+// named helper rather than an inline expression repeated at each call site.
+const laneHeight = (rowCount: number) => Math.max(1, rowCount) * ROW_HEIGHT + 12;
 
 function darken(hex: string, amt: number) {
   const c = hex.replace("#", "");
@@ -820,10 +825,10 @@ export default function RoadmapBoard({
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-6 py-4">
+      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-6 pb-[13px] pt-4">
         <div className="mr-auto flex items-center gap-3">
           <div>
-            <h1 className="text-xl font-semibold">Product</h1>
+            <h1 className="text-[19px] font-semibold tracking-tight">Product</h1>
             <p className="figure text-xs text-text-muted">
               {categories.length} lanes · {allItems.length} items · {milestones.length} milestones
             </p>
@@ -990,19 +995,19 @@ export default function RoadmapBoard({
       )}
 
       <div className="flex-1 overflow-auto p-6">
-        <div className="mb-4 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border2 bg-bg px-3.5 py-2">
+        <div className="mb-4 overflow-hidden rounded-[14px] border border-border bg-surface shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border2 bg-bg px-3.5 py-[9px]">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => panBy(-1)}
                 title="Pan back"
                 aria-label="Pan back"
-                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted"
+                className="btn-ghost h-[26px] w-[26px] justify-center p-0 text-text-muted"
               >
                 ‹
               </button>
-              <button type="button" onClick={jumpToToday} className="btn-ghost px-2.5 py-1 text-xs">
+              <button type="button" onClick={jumpToToday} className="btn-ghost px-2.5 py-[5px] text-[11.5px]">
                 Today
               </button>
               <button
@@ -1010,14 +1015,14 @@ export default function RoadmapBoard({
                 onClick={() => panBy(1)}
                 title="Pan forward"
                 aria-label="Pan forward"
-                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted"
+                className="btn-ghost h-[26px] w-[26px] justify-center p-0 text-text-muted"
               >
                 ›
               </button>
             </div>
             <div className="flex items-center gap-2">
               {dragHint && (
-                <span className="figure rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] text-accent">
+                <span className="figure rounded-full border border-accent/30 bg-accent/10 px-2.5 py-[3px] text-[11px] text-accent">
                   {dragHint}
                 </span>
               )}
@@ -1027,11 +1032,11 @@ export default function RoadmapBoard({
                 disabled={pxPerDay <= minPxPerDay}
                 title="Zoom out"
                 aria-label="Zoom out"
-                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted disabled:opacity-40"
+                className="btn-ghost h-[26px] w-[26px] justify-center p-0 text-text-muted disabled:opacity-40"
               >
                 −
               </button>
-              <span className="figure w-16 text-center text-[10px] uppercase tracking-wide text-text-muted">
+              <span className="figure w-[74px] text-center text-[10.5px] uppercase tracking-[0.06em] text-text-muted">
                 {zoomBand}
               </span>
               <button
@@ -1040,7 +1045,7 @@ export default function RoadmapBoard({
                 disabled={pxPerDay >= 32}
                 title="Zoom in"
                 aria-label="Zoom in"
-                className="btn-ghost h-7 w-7 justify-center p-0 text-text-muted disabled:opacity-40"
+                className="btn-ghost h-[26px] w-[26px] justify-center p-0 text-text-muted disabled:opacity-40"
               >
                 +
               </button>
@@ -1055,14 +1060,14 @@ export default function RoadmapBoard({
         <div className="min-w-full w-max">
           {/* Header rail */}
           <div className="sticky top-0 z-20 flex border-b border-border bg-surface">
-            <div className="sticky left-0 z-30 w-44 shrink-0 border-r border-border bg-surface px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-text-muted">
+            <div className="sticky left-0 z-30 w-44 shrink-0 border-r border-border bg-surface px-[14px] py-[9px] text-[9px] uppercase tracking-[0.15em] text-text-muted">
               Timeline
             </div>
-            <div className="relative h-9" style={{ width }}>
+            <div className="relative h-8" style={{ width }}>
               {headerSegments.map((s) => (
                 <div
                   key={s.from}
-                  className={`figure absolute top-0 flex h-full items-center border-r border-border px-2 text-xs font-medium ${
+                  className={`figure absolute top-0 flex h-full items-center border-r border-border px-2 text-[9.5px] tracking-[0.08em] ${
                     s.zone === "now" ? "text-text" : "bg-bg text-text-muted"
                   }`}
                   style={{ left: x(s.from), width: x(s.to) - x(s.from) }}
@@ -1110,13 +1115,11 @@ export default function RoadmapBoard({
                   if (el) laneRefs.current.set(c.id, el);
                   else laneRefs.current.delete(c.id);
                 }}
-                className={`flex border-b border-border/70 ${
-                  laneIdx < categories.length - 1 ? "mb-3" : ""
-                }`}
+                className="flex border-b border-border/70"
               >
                 <LaneLabelCell
                   category={c}
-                  minHeight={Math.max(64, rowCount * 38 + 22)}
+                  minHeight={laneHeight(rowCount)}
                   hidden={hiddenCategories.has(c.id)}
                   onlyOne={categories.length === 1}
                   isFirst={laneIdx === 0}
@@ -1129,7 +1132,7 @@ export default function RoadmapBoard({
                   className={`relative ${hiddenCategories.has(c.id) ? "opacity-25 pointer-events-none" : ""}`}
                   style={{
                     width,
-                    minHeight: Math.max(56, rowCount * 38 + 22),
+                    minHeight: laneHeight(rowCount),
                     overflow: previewingIntoAnotherLane ? "visible" : "hidden",
                   }}
                 >
@@ -1298,7 +1301,7 @@ function ItemBar({
       onMouseLeave={hover.onMouseLeave}
     >
       <button
-        className={`absolute top-0 z-10 h-[22px] w-full cursor-grab touch-none overflow-hidden rounded-md text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing ${
+        className={`absolute top-0 z-10 h-[22px] w-full cursor-grab touch-none overflow-hidden rounded-[7px] text-left text-[11px] font-medium text-white shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing ${
           item.stage === "EXPLORING" ? "border border-dashed border-white/60 opacity-75" : ""
         }`}
         style={{ background: row % 2 === 1 ? darken(color, 0.18) : color }}
@@ -1750,12 +1753,12 @@ function LaneLabelCell({
 
   return (
     <div
-      className={`sticky left-0 z-20 flex w-44 shrink-0 flex-col justify-center gap-1 border-r border-border px-3 py-2 hover:brightness-110 ${
+      className={`sticky left-0 z-20 flex w-44 shrink-0 flex-col justify-center gap-1.5 border-r border-border py-[11px] pl-[14px] pr-3 hover:brightness-110 ${
         hidden ? "opacity-50" : ""
       } ${ring ? "ring-2 ring-inset ring-white" : ""}`}
       style={{ minHeight, background: category.color }}
     >
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
         {renaming ? (
           <input
             autoFocus
@@ -1775,7 +1778,7 @@ function LaneLabelCell({
           <button
             onClick={onToggleVisibility}
             title={hidden ? "Click to show this lane" : "Click to hide this lane"}
-            className="min-w-0 flex-1 truncate text-left text-sm font-medium text-white"
+            className="min-w-0 flex-1 truncate text-left text-[13px] font-semibold text-white"
           >
             <span className={hidden ? "line-through" : ""}>{category.name}</span>
           </button>
@@ -1845,12 +1848,12 @@ function MilestoneListCard({
   const sorted = [...milestones].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+    <div className="overflow-hidden rounded-[14px] border border-border bg-surface shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border2 px-4 py-3">
-        <span className="text-sm font-semibold">Milestones</span>
+        <span className="text-[13.5px] font-semibold">Milestones</span>
         <div className="flex flex-wrap items-center gap-3">
           {rollup.map((r) => (
-            <span key={r.type} className="flex items-center gap-1.5 text-xs text-text-muted">
+            <span key={r.type} className="flex items-center gap-1.5 text-[11px] text-text-muted">
               <MilestoneIcon type={r.type} size={11} />
               {MILESTONE_META[r.type].label}
               <span className="figure text-text">{r.count}</span>
@@ -1868,14 +1871,14 @@ function MilestoneListCard({
             className="flex w-full items-center gap-3 border-b border-border2 px-4 py-2.5 text-left last:border-b-0 hover:bg-bg"
           >
             <MilestoneIcon type={m.type} size={13} />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">{m.name}</span>
+            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{m.name}</span>
             {lane && (
               <span className="flex flex-none items-center gap-1.5 text-xs text-text-muted">
                 <span className="h-1.5 w-1.5 rounded-sm" style={{ background: lane.color }} />
                 {lane.name}
               </span>
             )}
-            <span className="figure flex-none text-xs text-text-muted">{fmtLong(m.date)}</span>
+            <span className="figure flex-none text-[11px] text-text-muted">{fmtLong(m.date)}</span>
           </button>
         );
       })}
