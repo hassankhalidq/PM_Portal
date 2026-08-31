@@ -1,6 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { createUser, deleteUser, updateUserRole } from "@/lib/actions";
 import { useClosePopover, useFloatingPosition, ConfirmDeleteButton } from "@/components/ui";
@@ -111,6 +112,7 @@ function RoleChip({
   lastAdmin: boolean;
   onError: (s: string) => void;
 }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [value, setValue] = useState(user.role);
   useEffect(() => setValue(user.role), [user.role]);
@@ -127,6 +129,7 @@ function RoleChip({
     start(async () => {
       try {
         await updateUserRole(user.id, next);
+        router.refresh();
       } catch (err) {
         setValue(prev);
         onError(err instanceof Error ? err.message : "Failed to update role.");
@@ -187,6 +190,7 @@ function UserRow({
   lastAdmin: boolean;
   onError: (s: string) => void;
 }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
 
   const remove = () => {
@@ -194,6 +198,7 @@ function UserRow({
     start(async () => {
       try {
         await deleteUser(user.id);
+        router.refresh();
       } catch (err) {
         onError(err instanceof Error ? err.message : "Failed to delete user.");
       }
@@ -236,6 +241,7 @@ function UserRow({
 }
 
 function NewUserForm({ onDone, onError }: { onDone: () => void; onError: (s: string) => void }) {
+  const router = useRouter();
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "INTERNAL" as Role });
   const [pending, start] = useTransition();
 
@@ -244,6 +250,7 @@ function NewUserForm({ onDone, onError }: { onDone: () => void; onError: (s: str
     start(async () => {
       try {
         await createUser(form);
+        router.refresh();
         onDone();
       } catch (err) {
         onError(err instanceof Error ? err.message : "Failed to create user.");

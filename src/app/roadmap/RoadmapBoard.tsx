@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   applyRoadmapTheme,
@@ -167,6 +168,7 @@ export default function RoadmapBoard({
   categories: CategoryT[];
   milestones: MilestoneT[];
 }) {
+  const router = useRouter();
   const [pxPerDay, setPxPerDay] = useState(4);
   const [snapWeeks, setSnapWeeksState] = useState(false);
   useEffect(() => {
@@ -586,6 +588,7 @@ export default function RoadmapBoard({
                 ? { milestoneDate: iso(resolved.start) }
                 : { itemDates: { startDate: iso(resolved.start), endDate: iso(resolved.end) } }),
             });
+            router.refresh();
           } catch {
             setOverrides((o) => {
               const { [d.id]: _, ...rest } = o;
@@ -605,6 +608,7 @@ export default function RoadmapBoard({
           } else {
             await updateItem(d.id, { startDate: iso(desired.start), endDate: iso(desired.end) });
           }
+          router.refresh();
         } catch {
           setOverrides((o) => {
             const { [d.id]: _, ...rest } = o;
@@ -635,6 +639,7 @@ export default function RoadmapBoard({
       startTransition(async () => {
         try {
           await updateItem(d.id, { startDate: iso(newStart), endDate: iso(newEnd) });
+          router.refresh();
         } catch {
           setOverrides((o) => {
             const { [d.id]: _, ...rest } = o;
@@ -1451,12 +1456,14 @@ function ItemForm({
     endDate: item?.endDate ?? new Date(Date.now() + 13 * DAY).toISOString().slice(0, 10),
     stage: item?.stage ?? ("PLANNED" as RoadmapStage),
   });
+  const router = useRouter();
   const [pending, start] = useTransition();
 
   const save = () =>
     start(async () => {
       if (item) await updateItem(item.id, form);
       else await createItem(form);
+      router.refresh();
       onDone();
     });
 
@@ -1464,6 +1471,7 @@ function ItemForm({
     if (!item) return;
     start(async () => {
       await deleteItem(item.id);
+      router.refresh();
       onDone();
     });
   };
@@ -1472,6 +1480,7 @@ function ItemForm({
     if (!item) return;
     start(async () => {
       await convertItemToMilestone(item.id);
+      router.refresh();
       onDone();
     });
   };
@@ -1606,12 +1615,14 @@ function MilestoneForm({
     date: milestone?.date ?? new Date().toISOString().slice(0, 10),
     description: milestone?.description ?? "",
   });
+  const router = useRouter();
   const [pending, start] = useTransition();
 
   const save = () =>
     start(async () => {
       if (milestone) await updateMilestone(milestone.id, form);
       else await createMilestone({ ...form, roadmapId });
+      router.refresh();
       onDone();
     });
 
@@ -1619,6 +1630,7 @@ function MilestoneForm({
     if (!milestone) return;
     start(async () => {
       await deleteMilestone(milestone.id);
+      router.refresh();
       onDone();
     });
   };
@@ -1627,6 +1639,7 @@ function MilestoneForm({
     if (!milestone) return;
     start(async () => {
       await convertMilestoneToItem(milestone.id);
+      router.refresh();
       onDone();
     });
   };
@@ -1741,13 +1754,18 @@ function LaneLabelCell({
   onToggleVisibility: () => void;
   onAddMenu: (rect: DOMRect) => void;
 }) {
+  const router = useRouter();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(category.name);
   const [, start] = useTransition();
 
   const commitRename = () => {
     setRenaming(false);
-    if (name.trim() && name !== category.name) start(() => updateCategory(category.id, { name: name.trim() }));
+    if (name.trim() && name !== category.name)
+      start(async () => {
+        await updateCategory(category.id, { name: name.trim() });
+        router.refresh();
+      });
     else setName(category.name);
   };
 
@@ -1805,7 +1823,12 @@ function LaneLabelCell({
           aria-label="Move lane up"
           title="Move lane up"
           disabled={isFirst}
-          onClick={() => start(() => moveCategory(category.id, "up"))}
+          onClick={() =>
+            start(async () => {
+              await moveCategory(category.id, "up");
+              router.refresh();
+            })
+          }
           className="grid h-5 w-5 shrink-0 place-items-center rounded text-[10px] text-white/70 hover:bg-white/20 disabled:opacity-30"
         >
           ▲
@@ -1814,7 +1837,12 @@ function LaneLabelCell({
           aria-label="Move lane down"
           title="Move lane down"
           disabled={isLast}
-          onClick={() => start(() => moveCategory(category.id, "down"))}
+          onClick={() =>
+            start(async () => {
+              await moveCategory(category.id, "down");
+              router.refresh();
+            })
+          }
           className="grid h-5 w-5 shrink-0 place-items-center rounded text-[10px] text-white/70 hover:bg-white/20 disabled:opacity-30"
         >
           ▼
@@ -1825,7 +1853,12 @@ function LaneLabelCell({
           disabled={onlyOne}
           title={onlyOne ? "At least one lane must exist" : "Remove lane and its items"}
           ariaLabel={`Remove ${category.name}`}
-          onConfirm={() => start(() => deleteCategory(category.id))}
+          onConfirm={() =>
+            start(async () => {
+              await deleteCategory(category.id);
+              router.refresh();
+            })
+          }
         />
       </div>
     </div>
@@ -1887,6 +1920,7 @@ function MilestoneListCard({
 }
 
 function ThemeMenu({ roadmapId, currentTheme }: { roadmapId: string; currentTheme: string }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const ref = useRef<HTMLDivElement>(null);
@@ -1912,7 +1946,12 @@ function ThemeMenu({ roadmapId, currentTheme }: { roadmapId: string; currentThem
                 disabled={pending}
                 className={`h-8 w-8 rounded-full ring-offset-2 ${currentTheme === key ? "ring-2 ring-accent" : ""}`}
                 style={{ background: t.accent }}
-                onClick={() => start(() => applyRoadmapTheme(roadmapId, key))}
+                onClick={() =>
+                  start(async () => {
+                    await applyRoadmapTheme(roadmapId, key);
+                    router.refresh();
+                  })
+                }
               />
             ))}
           </div>
@@ -1929,6 +1968,7 @@ function LaneManager({
   categories: CategoryT[];
   roadmapId: string;
 }) {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [color, setColor] = useState(SWATCHES[0]);
   const [pending, start] = useTransition();
@@ -1975,6 +2015,7 @@ function LaneManager({
             onClick={() =>
               start(async () => {
                 await createCategory(name, color, roadmapId);
+                router.refresh();
                 setName("");
               })
             }
@@ -2000,6 +2041,7 @@ function LaneRow({
   onlyOne: boolean;
   setError: (s: string) => void;
 }) {
+  const router = useRouter();
   const [name, setName] = useState(category.name);
   const [pending, start] = useTransition();
 
@@ -2010,7 +2052,12 @@ function LaneRow({
         type="color"
         value={category.color}
         className="h-7 w-7 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0"
-        onChange={(e) => start(() => updateCategory(category.id, { color: e.target.value }))}
+        onChange={(e) =>
+          start(async () => {
+            await updateCategory(category.id, { color: e.target.value });
+            router.refresh();
+          })
+        }
       />
       <input
         className="field border-transparent px-2 py-1"
@@ -2018,14 +2065,22 @@ function LaneRow({
         onChange={(e) => setName(e.target.value)}
         onBlur={() => {
           if (name.trim() && name !== category.name)
-            start(() => updateCategory(category.id, { name }));
+            start(async () => {
+              await updateCategory(category.id, { name });
+              router.refresh();
+            });
         }}
       />
       <button
         className="btn-ghost h-7 w-7 justify-center p-0"
         disabled={first || pending}
         aria-label="Move lane up"
-        onClick={() => start(() => moveCategory(category.id, "up"))}
+        onClick={() =>
+          start(async () => {
+            await moveCategory(category.id, "up");
+            router.refresh();
+          })
+        }
       >
         ↑
       </button>
@@ -2033,7 +2088,12 @@ function LaneRow({
         className="btn-ghost h-7 w-7 justify-center p-0"
         disabled={last || pending}
         aria-label="Move lane down"
-        onClick={() => start(() => moveCategory(category.id, "down"))}
+        onClick={() =>
+          start(async () => {
+            await moveCategory(category.id, "down");
+            router.refresh();
+          })
+        }
       >
         ↓
       </button>
@@ -2047,6 +2107,7 @@ function LaneRow({
           start(async () => {
             try {
               await deleteCategory(category.id);
+              router.refresh();
             } catch {
               setError("At least one lane must exist.");
             }

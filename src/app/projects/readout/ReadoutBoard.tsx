@@ -57,6 +57,17 @@ function relativeTime(iso: string, now: Date) {
   return `${days} days ago`;
 }
 
+// A node with children shows a rolled-up progress, not its own raw stored
+// field (see the identical helper in ProjectBoard.tsx) — a root project's
+// `progress` column goes stale the moment it stops being a leaf, so this
+// view has to compute the same rollup rather than reading the field as-is.
+function progressRollup(node: ReadoutNodeT, byParent: Map<string | null, ReadoutNodeT[]>): number {
+  const kids = byParent.get(node.id) ?? [];
+  if (kids.length === 0) return node.progress;
+  const sum = kids.reduce((acc, k) => acc + progressRollup(k, byParent), 0);
+  return Math.round(sum / kids.length);
+}
+
 export default function ReadoutBoard({
   nodes,
   boardId,
@@ -110,6 +121,15 @@ export default function ReadoutBoard({
   }, [nodes, today]);
 
   const roots = useMemo(() => nodes.filter((n) => n.parentId === null), [nodes]);
+  const byParent = useMemo(() => {
+    const map = new Map<string | null, ReadoutNodeT[]>();
+    for (const n of nodes) {
+      const list = map.get(n.parentId) ?? [];
+      list.push(n);
+      map.set(n.parentId, list);
+    }
+    return map;
+  }, [nodes]);
   const blockedNodes = useMemo(() => nodes.filter((n) => n.status === "BLOCKED"), [nodes]);
   const atRiskNodes = useMemo(
     () => nodes.filter((n) => n.startDate && new Date(n.startDate) < today && n.status !== "DONE"),
@@ -128,11 +148,11 @@ export default function ReadoutBoard({
       : "Everything is moving.";
   const summary = `${kpis.onTrack} in progress, ${kpis.shipped} shipped, ${kpis.atRisk} with dates already at risk out of ${nodes.length} items.`;
 
-  const trackFor = (n: ReadoutNodeT) => {
+  const trackFor = (n: ReadoutNodeT, progress: number) => {
     if (n.status === "BLOCKED") return { label: "Blocked", color: "text-danger" };
     if (n.startDate && new Date(n.startDate) < today && n.status !== "DONE")
       return { label: "At risk", color: "text-warning" };
-    if (n.progress > 0) return { label: "On track", color: "text-accent" };
+    if (progress > 0) return { label: "On track", color: "text-accent" };
     return { label: "Not started", color: "text-text-muted" };
   };
 
@@ -216,7 +236,8 @@ export default function ReadoutBoard({
             <div className="border-b border-border2 px-4 py-3 text-sm font-semibold">Progress by project</div>
             {roots.length === 0 && <p className="px-4 py-5 text-sm text-text-muted">No projects on this board.</p>}
             {roots.map((r) => {
-              const track = trackFor(r);
+              const progress = progressRollup(r, byParent);
+              const track = trackFor(r, progress);
               return (
                 <div
                   key={r.id}
@@ -231,10 +252,10 @@ export default function ReadoutBoard({
                     <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border">
                       <div
                         className="animate-bar-grow h-full rounded-full bg-accent"
-                        style={{ width: `${Math.max(0, Math.min(100, r.progress))}%` }}
+                        style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
                       />
                     </div>
-                    <span className="figure w-9 text-right text-xs text-text-muted">{r.progress}%</span>
+                    <span className="figure w-9 text-right text-xs text-text-muted">{progress}%</span>
                   </div>
                   <span className={`figure text-[10px] uppercase tracking-wide ${track.color}`}>{track.label}</span>
                   <span className="figure truncate text-right text-xs text-text-muted">

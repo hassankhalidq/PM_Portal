@@ -55,14 +55,21 @@ export default async function DashboardPage() {
   const now = new Date();
   const boardStats = boards.map((b) => {
     const boardNodes = nodes.filter((n) => n.boardId === b.id);
+    // A node with children shows/stores a rolled-up progress, not its own
+    // raw field (see updateNode's guard + progressRollup in ProjectBoard) —
+    // only leaves ever hold a live, meaningful progress value, so average
+    // over those rather than every node (which would double-count a
+    // parent's stale stored value alongside its own children's).
+    const parentIds = new Set(boardNodes.map((n) => n.parentId).filter((id): id is string => id !== null));
+    const leafNodes = boardNodes.filter((n) => !parentIds.has(n.id));
     const statusCounts = { NOT_STARTED: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 };
     let progressSum = 0;
     let overdueCount = 0;
     for (const n of boardNodes) {
       statusCounts[n.status]++;
-      progressSum += n.progress;
       if (n.endDate && n.endDate < now && n.status !== "DONE") overdueCount++;
     }
+    for (const n of leafNodes) progressSum += n.progress;
     return {
       id: b.id,
       name: b.name,
@@ -70,7 +77,7 @@ export default async function DashboardPage() {
       totalProjects: boardNodes.filter((n) => n.parentId === null).length,
       totalItems: boardNodes.length,
       statusCounts,
-      avgProgress: boardNodes.length ? Math.round(progressSum / boardNodes.length) : 0,
+      avgProgress: leafNodes.length ? Math.round(progressSum / leafNodes.length) : 0,
       overdueCount,
     };
   });

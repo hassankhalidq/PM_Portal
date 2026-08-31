@@ -152,7 +152,7 @@ export async function updateNode(
   revalidatePath("/projects");
 }
 
-export async function reorderProjectGroups(boardId: string, orderedIds: string[]) {
+export async function reorderProjectGroups(orderedIds: string[]) {
   await requireSession();
   await prisma.$transaction(
     orderedIds.map((id, index) =>

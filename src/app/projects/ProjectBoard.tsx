@@ -3,15 +3,12 @@
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
-  DENSITY_EVENT,
   KPIS_EVENT,
   ALERTS_EVENT,
-  getDensity,
   getShowKpis,
   getAlertsOn,
-  type Density,
 } from "@/lib/uiPrefs";
 import {
   addComment,
@@ -248,6 +245,7 @@ export default function ProjectBoard({
   dependencies: DependencyT[];
   weeklyStatuses: WeeklyStatusT[];
 }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const savedView = searchParams.get("saved");
 
@@ -267,7 +265,6 @@ export default function ProjectBoard({
   const [, startBulk] = useTransition();
 
   const [showKpis, setShowKpisState] = useState(true);
-  const [density, setDensityState] = useState<Density>("comfortable");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -280,14 +277,11 @@ export default function ProjectBoard({
 
   useEffect(() => {
     setShowKpisState(getShowKpis());
-    setDensityState(getDensity());
     setAlertsOnState(getAlertsOn());
     setLastSeenNotifAt(localStorage.getItem("last-seen-notif-at") ?? "");
     const onKpis = (e: Event) => setShowKpisState((e as CustomEvent<boolean>).detail);
-    const onDensity = (e: Event) => setDensityState((e as CustomEvent<Density>).detail);
     const onAlerts = (e: Event) => setAlertsOnState((e as CustomEvent<boolean>).detail);
     window.addEventListener(KPIS_EVENT, onKpis);
-    window.addEventListener(DENSITY_EVENT, onDensity);
     window.addEventListener(ALERTS_EVENT, onAlerts);
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -298,7 +292,6 @@ export default function ProjectBoard({
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener(KPIS_EVENT, onKpis);
-      window.removeEventListener(DENSITY_EVENT, onDensity);
       window.removeEventListener(ALERTS_EVENT, onAlerts);
       window.removeEventListener("keydown", onKeyDown);
     };
@@ -317,6 +310,7 @@ export default function ProjectBoard({
     setSelectedRows(new Set());
     startBulk(async () => {
       await Promise.all(ids.map((id) => updateNode(id, data)));
+      router.refresh();
     });
   };
 
@@ -435,7 +429,7 @@ export default function ProjectBoard({
     const prevOrder = currentRootIds;
     setGroupOrder(next);
     startReorder(() => {
-      reorderProjectGroups(currentBoardId, next).catch(() => setGroupOrder(prevOrder));
+      reorderProjectGroups(next).catch(() => setGroupOrder(prevOrder));
     });
   };
 
@@ -450,7 +444,7 @@ export default function ProjectBoard({
     const prevOrder = currentRootIds;
     setGroupOrder(next);
     startReorder(() => {
-      reorderProjectGroups(currentBoardId, next).catch(() => setGroupOrder(prevOrder));
+      reorderProjectGroups(next).catch(() => setGroupOrder(prevOrder));
     });
   };
 
@@ -1123,6 +1117,7 @@ function FiltersPopover({
 // absolute-positioned menu of colored-dot options instead of a native
 // dropdown, matching the redesign's "no colored pills" language.
 function StatusChip({ node }: { node: NodeT }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [value, setValue] = useState(node.status);
   useEffect(() => setValue(node.status), [node.status]);
@@ -1138,6 +1133,7 @@ function StatusChip({ node }: { node: NodeT }) {
     start(async () => {
       try {
         await updateNode(node.id, { status: next });
+        router.refresh();
       } catch {
         setValue(prev);
       }
@@ -1189,6 +1185,7 @@ function StatusChip({ node }: { node: NodeT }) {
 // Small mono-uppercase colored label — priority's equivalent of StatusChip
 // (no dot, matching the redesign's "priority is a small mono label" language).
 function PriorityChip({ node }: { node: NodeT }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [value, setValue] = useState(node.priority);
   useEffect(() => setValue(node.priority), [node.priority]);
@@ -1204,6 +1201,7 @@ function PriorityChip({ node }: { node: NodeT }) {
     start(async () => {
       try {
         await updateNode(node.id, { priority: next });
+        router.refresh();
       } catch {
         setValue(prev);
       }
@@ -1613,6 +1611,7 @@ function InlineCreate({
   onDone: () => void;
   boardId?: string;
 }) {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [pending, start] = useTransition();
 
@@ -1620,6 +1619,7 @@ function InlineCreate({
     if (!name.trim()) return onDone();
     start(async () => {
       await createNode(parentId, name, boardId);
+      router.refresh();
       onDone();
     });
   };
@@ -1661,6 +1661,7 @@ function SidePanel({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const router = useRouter();
   const [form, setForm] = useState({
     name: node.name,
     owner: node.owner,
@@ -1706,6 +1707,7 @@ function SidePanel({
         blockReason: form.blockReason,
         request: form.request,
       });
+      router.refresh();
     });
 
   const pickFile = () => fileInput.current?.click();
@@ -1718,15 +1720,21 @@ function SidePanel({
     start(async () => {
       const res = await uploadAttachment(node.id, fd);
       if (res?.error) setUploadError(res.error);
+      router.refresh();
     });
     if (fileInput.current) fileInput.current.value = "";
   };
 
-  const removeAttachment = (id: string) => start(() => deleteAttachment(id));
+  const removeAttachment = (id: string) =>
+    start(async () => {
+      await deleteAttachment(id);
+      router.refresh();
+    });
 
   const remove = () => {
     start(async () => {
       await deleteNode(node.id);
+      router.refresh();
       onDeleted();
     });
   };
@@ -1736,6 +1744,7 @@ function SidePanel({
     start(async () => {
       await addComment(node.id, comment);
       setComment("");
+      router.refresh();
     });
   };
 
@@ -1753,6 +1762,7 @@ function SidePanel({
     start(async () => {
       try {
         await addDependency(predecessorId, node.id);
+        router.refresh();
       } catch (err) {
         setDepError(err instanceof Error ? err.message : "Failed to link.");
       }
@@ -1760,7 +1770,10 @@ function SidePanel({
   };
   const removePredecessor = (id: string) => {
     setDepError("");
-    start(() => removeDependency(id));
+    start(async () => {
+      await removeDependency(id);
+      router.refresh();
+    });
   };
 
   return (
@@ -2190,6 +2203,7 @@ function KanbanProjectSection({
   toggle: (id: string) => void;
   onSelect: (id: string) => void;
 }) {
+  const router = useRouter();
   const [, start] = useTransition();
   const [dragOverStatus, setDragOverStatus] = useState<NodeT["status"] | null>(null);
   // Optimistic status overrides: a dropped card must move to its new column
@@ -2214,6 +2228,7 @@ function KanbanProjectSection({
     start(async () => {
       try {
         await updateNode(id, { status });
+        router.refresh();
       } catch {
         setStatusOverrides((o) => {
           const { [id]: _, ...rest } = o;
@@ -2224,7 +2239,6 @@ function KanbanProjectSection({
   };
 
   const extent = dateExtent(root.id, byParent, byId, today);
-  const extentStr = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
@@ -2600,6 +2614,7 @@ function TimelineProjectSection({
   const [connectPreview, setConnectPreview] = useState<{ fromId: string; x: number; y: number } | null>(null);
   const [depError, setDepError] = useState("");
   const [, startDep] = useTransition();
+  const router = useRouter();
 
   const relPoint = (e: React.PointerEvent) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -2633,6 +2648,7 @@ function TimelineProjectSection({
     startDep(async () => {
       try {
         await addDependency(d.fromId, targetId!);
+        router.refresh();
       } catch (err) {
         setDepError(err instanceof Error ? err.message : "Failed to link.");
       }
@@ -2876,6 +2892,7 @@ type LogFormState = {
 };
 
 function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[] }) {
+  const router = useRouter();
   const [, start] = useTransition();
   const [filterNodeId, setFilterNodeId] = useState("");
   const [error, setError] = useState("");
@@ -2911,6 +2928,7 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
           status: addForm.status,
           remarks: addForm.remarks,
         });
+        router.refresh();
         setAddForm({ ...emptyForm, date: addForm.date, nodeId: addForm.nodeId });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to add entry.");
@@ -2943,6 +2961,7 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
     start(async () => {
       try {
         await updateLogEntry(id, editForm);
+        router.refresh();
         setEditingId(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save entry.");
@@ -2952,7 +2971,10 @@ function LogView({ nodes, logEntries }: { nodes: NodeT[]; logEntries: LogEntryT[
 
   const remove = (id: string) => {
     if (!confirm("Delete this log entry?")) return;
-    start(() => deleteLogEntry(id));
+    start(async () => {
+      await deleteLogEntry(id);
+      router.refresh();
+    });
   };
 
   return (
@@ -3217,6 +3239,7 @@ function fmtWeeklyRange(start: string, end: string) {
 }
 
 function WeeklyStatusView({ boardId, weeklyStatuses }: { boardId: string; weeklyStatuses: WeeklyStatusT[] }) {
+  const router = useRouter();
   const [, start] = useTransition();
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -3294,6 +3317,7 @@ function WeeklyStatusView({ boardId, weeklyStatuses }: { boardId: string; weekly
           await updateWeeklyStatus(editingId, form);
           setEditingId(null);
         }
+        router.refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save weekly status.");
       }
@@ -3302,7 +3326,10 @@ function WeeklyStatusView({ boardId, weeklyStatuses }: { boardId: string; weekly
 
   const remove = (id: string) => {
     if (!confirm("Delete this week's status?")) return;
-    start(() => deleteWeeklyStatus(id));
+    start(async () => {
+      await deleteWeeklyStatus(id);
+      router.refresh();
+    });
   };
 
   return (
