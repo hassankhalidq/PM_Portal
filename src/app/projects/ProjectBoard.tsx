@@ -237,6 +237,7 @@ export default function ProjectBoard({
   logEntries,
   dependencies,
   weeklyStatuses,
+  canEdit = true,
 }: {
   nodes: NodeT[];
   boards: BoardT[];
@@ -244,6 +245,7 @@ export default function ProjectBoard({
   logEntries: LogEntryT[];
   dependencies: DependencyT[];
   weeklyStatuses: WeeklyStatusT[];
+  canEdit?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -705,9 +707,15 @@ export default function ProjectBoard({
             )}
           </div>
         )}
-        <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
-          New project
-        </button>
+        {canEdit ? (
+          <button className="btn-primary" onClick={() => setCreatingRoot(true)}>
+            New project
+          </button>
+        ) : (
+          <span className="rounded-full border border-border bg-bg px-3 py-1.5 text-xs font-medium text-text-muted">
+            View only
+          </span>
+        )}
       </header>
 
       <div className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-6 py-2">

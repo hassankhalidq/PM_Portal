@@ -67,11 +67,16 @@ export default function SidebarNav({
   active,
   userName,
   role,
+  projectAccess,
+  roadmapAccess,
 }: {
   active: Active;
   userName: string;
   role?: string;
+  projectAccess?: string;
+  roadmapAccess?: string;
 }) {
+  const isSuperAdmin = role === "SUPER_ADMIN";
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
   const searchParams = useSearchParams();
@@ -132,7 +137,9 @@ export default function SidebarNav({
 
         <nav className="flex flex-1 flex-col gap-1 p-3">
         {NAV_ITEMS.map((item) => {
-          if (item.key === "admin" && role !== "ADMIN") return null;
+          if (item.key === "admin" && role !== "ADMIN" && !isSuperAdmin) return null;
+          if (item.key === "projects" && !isSuperAdmin && projectAccess === "NONE") return null;
+          if (item.key === "roadmap" && !isSuperAdmin && roadmapAccess === "NONE") return null;
           const isActive = active === item.key;
           return (
             <Link

@@ -161,12 +161,14 @@ export default function RoadmapBoard({
   currentTheme,
   categories,
   milestones,
+  canEdit = true,
 }: {
   roadmaps: RoadmapT[];
   currentRoadmapId: string;
   currentTheme: string;
   categories: CategoryT[];
   milestones: MilestoneT[];
+  canEdit?: boolean;
 }) {
   const router = useRouter();
   const [pxPerDay, setPxPerDay] = useState(4);
@@ -880,24 +882,32 @@ export default function RoadmapBoard({
         >
           ◆ Milestones
         </button>
-        <button className="btn-ghost" onClick={() => setPanel({ kind: "lanes" })}>
-          Manage lanes
-        </button>
-        <button
-          className="btn-ghost"
-          onClick={() => setPanel({ kind: "new-milestone" })}
-          disabled={categories.length === 0}
-        >
-          Add milestone
-        </button>
-        <ThemeMenu roadmapId={currentRoadmapId} currentTheme={currentTheme} />
-        <button
-          className="btn-primary"
-          onClick={() => setPanel({ kind: "new-item" })}
-          disabled={categories.length === 0}
-        >
-          Add item
-        </button>
+        {canEdit ? (
+          <>
+            <button className="btn-ghost" onClick={() => setPanel({ kind: "lanes" })}>
+              Manage lanes
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => setPanel({ kind: "new-milestone" })}
+              disabled={categories.length === 0}
+            >
+              Add milestone
+            </button>
+            <ThemeMenu roadmapId={currentRoadmapId} currentTheme={currentTheme} />
+            <button
+              className="btn-primary"
+              onClick={() => setPanel({ kind: "new-item" })}
+              disabled={categories.length === 0}
+            >
+              Add item
+            </button>
+          </>
+        ) : (
+          <span className="rounded-full border border-border bg-bg px-3 py-1.5 text-xs font-medium text-text-muted">
+            View only
+          </span>
+        )}
       </header>
 
       {paletteOpen && (

@@ -7,7 +7,8 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "db:push": "prisma db push",
-    "db:seed": "node prisma/seed.mjs"
+    "db:seed": "node prisma/seed.mjs",
+    "db:provision-multitenancy": "node prisma/provision-multitenancy.mjs"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

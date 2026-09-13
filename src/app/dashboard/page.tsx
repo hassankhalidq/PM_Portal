@@ -8,10 +8,11 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const session = await auth();
   const role = (session?.user as { role?: string } | undefined)?.role;
+  const orgId = (session?.user as { orgId?: string } | undefined)?.orgId;
 
   const [boards, roadmaps] = await Promise.all([
-    prisma.board.findMany({ orderBy: { createdAt: "asc" } }),
-    prisma.roadmap.findMany({ orderBy: { createdAt: "asc" } }),
+    prisma.board.findMany({ where: { orgId }, orderBy: { createdAt: "asc" } }),
+    prisma.roadmap.findMany({ where: { orgId }, orderBy: { createdAt: "asc" } }),
   ]);
   const boardIds = boards.map((b) => b.id);
   const roadmapIds = roadmaps.map((r) => r.id);
@@ -128,9 +129,24 @@ export default async function DashboardPage() {
       boardId: l.node.boardId as string,
     }));
 
+  const u = session?.user as { projectAccess?: string; roadmapAccess?: string } | undefined;
+  const canViewProjects = role === "SUPER_ADMIN" || u?.projectAccess !== "NONE";
+  const canViewRoadmap = role === "SUPER_ADMIN" || u?.roadmapAccess !== "NONE";
+
   return (
-    <Shell active="dashboard" userName={session?.user?.name ?? ""} role={role}>
-      <DashboardBoard boards={boardStats} roadmaps={roadmapStats} nodes={attentionNodes} logs={logs} />
+    <Shell
+      active="dashboard"
+      userName={session?.user?.name ?? ""}
+      role={role}
+      projectAccess={u?.projectAccess}
+      roadmapAccess={u?.roadmapAccess}
+    >
+      <DashboardBoard
+        boards={canViewProjects ? boardStats : []}
+        roadmaps={canViewRoadmap ? roadmapStats : []}
+        nodes={canViewProjects ? attentionNodes : []}
+        logs={canViewProjects ? logs : []}
+      />
     </Shell>
   );
 }

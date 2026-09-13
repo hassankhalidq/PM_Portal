@@ -12,8 +12,10 @@ export default async function ProjectsPage({
 }) {
   const session = await auth();
   const role = (session?.user as { role?: string } | undefined)?.role;
+  const orgId = (session?.user as { orgId?: string } | undefined)?.orgId;
+  const canEdit = role === "SUPER_ADMIN" || (session?.user as { projectAccess?: string } | undefined)?.projectAccess === "EDIT";
 
-  const boards = await prisma.board.findMany({ orderBy: { createdAt: "asc" } });
+  const boards = await prisma.board.findMany({ where: { orgId }, orderBy: { createdAt: "asc" } });
   const boardParam = Array.isArray(searchParams.board) ? searchParams.board[0] : searchParams.board;
   const currentBoard =
     (boardParam ? boards.find((b) => b.id === boardParam) : undefined) ??
@@ -106,7 +108,13 @@ export default async function ProjectsPage({
   }));
 
   return (
-    <Shell active="projects" userName={session?.user?.name ?? ""} role={role}>
+    <Shell
+      active="projects"
+      userName={session?.user?.name ?? ""}
+      role={role}
+      projectAccess={(session?.user as { projectAccess?: string } | undefined)?.projectAccess}
+      roadmapAccess={(session?.user as { roadmapAccess?: string } | undefined)?.roadmapAccess}
+    >
       <ProjectBoard
         nodes={serialized}
         boards={boards.map((b) => ({ id: b.id, name: b.name, description: b.description, isDefault: b.isDefault }))}
@@ -114,6 +122,7 @@ export default async function ProjectsPage({
         logEntries={serializedLogEntries}
         dependencies={dependencies}
         weeklyStatuses={serializedWeeklyStatuses}
+        canEdit={canEdit}
       />
     </Shell>
   );

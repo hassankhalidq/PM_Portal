@@ -12,8 +12,9 @@ export default async function ReadoutPage({
 }) {
   const session = await auth();
   const role = (session?.user as { role?: string } | undefined)?.role;
+  const orgId = (session?.user as { orgId?: string } | undefined)?.orgId;
 
-  const boards = await prisma.board.findMany({ orderBy: { createdAt: "asc" } });
+  const boards = await prisma.board.findMany({ where: { orgId }, orderBy: { createdAt: "asc" } });
   const boardParam = Array.isArray(searchParams.board) ? searchParams.board[0] : searchParams.board;
   const currentBoard =
     (boardParam ? boards.find((b) => b.id === boardParam) : undefined) ??
@@ -55,7 +56,13 @@ export default async function ReadoutPage({
   }));
 
   return (
-    <Shell active="projects" userName={session?.user?.name ?? ""} role={role}>
+    <Shell
+      active="projects"
+      userName={session?.user?.name ?? ""}
+      role={role}
+      projectAccess={(session?.user as { projectAccess?: string } | undefined)?.projectAccess}
+      roadmapAccess={(session?.user as { roadmapAccess?: string } | undefined)?.roadmapAccess}
+    >
       <ReadoutBoard nodes={serialized} boardId={currentBoard?.id ?? ""} boardName={currentBoard?.name ?? ""} />
     </Shell>
   );

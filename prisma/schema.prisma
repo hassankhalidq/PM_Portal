@@ -9,9 +9,20 @@ datasource db {
 }
 
 enum Role {
+  SUPER_ADMIN
   ADMIN
   INTERNAL
   // "EXTERNAL" / "CLIENT" can be added later without a schema rewrite
+}
+
+// Per-section access for INTERNAL/ADMIN users. NONE hides the section
+// entirely (nav item and route); VIEW renders it read-only; EDIT is full
+// read/write. SUPER_ADMIN ignores this and always has full access
+// everywhere, across every org.
+enum AccessLevel {
+  NONE
+  VIEW
+  EDIT
 }
 
 enum NodeStatus {
@@ -41,14 +52,39 @@ enum RoadmapStage {
   COMMITTED
 }
 
+// A tenant. Every user, board, and roadmap belongs to exactly one
+// Organization; that's the entire isolation boundary between companies
+// sharing this deployment. SUPER_ADMIN accounts still have a home org (kept
+// non-nullable for simplicity) but their role bypasses the boundary.
+model Organization {
+  id        String     @id @default(cuid())
+  name      String
+  slug      String     @unique
+  createdAt DateTime   @default(now())
+  users     User[]
+  boards    Board[]
+  roadmaps  Roadmap[]
+}
+
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  name         String
-  passwordHash String
-  role         Role      @default(INTERNAL)
-  comments     Comment[]
-  createdAt    DateTime  @default(now())
+  id             String       @id @default(cuid())
+  email          String
+  name           String
+  passwordHash   String
+  role           Role         @default(INTERNAL)
+  // Section-level access, independent of role. Ignored for SUPER_ADMIN.
+  projectAccess  AccessLevel  @default(EDIT)
+  roadmapAccess  AccessLevel  @default(EDIT)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId          String?
+  comments       Comment[]
+  createdAt      DateTime     @default(now())
+
+  // Email is unique per org, not globally — the same person's email can
+  // exist as separate accounts in separate companies. Login resolves the
+  // org first (from the login link/picker), then looks up by [orgId, email].
+  @@unique([orgId, email])
+  @@index([orgId])
 }
 
 model Board {
@@ -56,9 +92,13 @@ model Board {
   name           String
   description    String         @default("")
   isDefault      Boolean        @default(false)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId          String?
   createdAt      DateTime       @default(now())
   nodes          ProjectNode[]
   weeklyStatuses WeeklyStatus[]
+
+  @@index([orgId])
 }
 
 // ---------- Board 1: Project Board (recursive tree) ----------
@@ -184,9 +224,13 @@ model Roadmap {
   description String        @default("")
   theme       String        @default("indigo")
   isDefault   Boolean       @default(false)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId       String?
   createdAt   DateTime      @default(now())
   categories  Category[]
   milestones  Milestone[]
+
+  @@index([orgId])
 }
 
 // ---------- Board 2: Roadmap Board ----------

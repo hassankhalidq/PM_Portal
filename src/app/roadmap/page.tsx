@@ -12,8 +12,10 @@ export default async function RoadmapPage({
 }) {
   const session = await auth();
   const role = (session?.user as { role?: string } | undefined)?.role;
+  const orgId = (session?.user as { orgId?: string } | undefined)?.orgId;
+  const canEdit = role === "SUPER_ADMIN" || (session?.user as { roadmapAccess?: string } | undefined)?.roadmapAccess === "EDIT";
 
-  const roadmaps = await prisma.roadmap.findMany({ orderBy: { createdAt: "asc" } });
+  const roadmaps = await prisma.roadmap.findMany({ where: { orgId }, orderBy: { createdAt: "asc" } });
   const roadmapParam = Array.isArray(searchParams.roadmap) ? searchParams.roadmap[0] : searchParams.roadmap;
   const currentRoadmap =
     (roadmapParam ? roadmaps.find((r) => r.id === roadmapParam) : undefined) ??
@@ -32,7 +34,13 @@ export default async function RoadmapPage({
     : [[], []];
 
   return (
-    <Shell active="roadmap" userName={session?.user?.name ?? ""} role={role}>
+    <Shell
+      active="roadmap"
+      userName={session?.user?.name ?? ""}
+      role={role}
+      projectAccess={(session?.user as { projectAccess?: string } | undefined)?.projectAccess}
+      roadmapAccess={(session?.user as { roadmapAccess?: string } | undefined)?.roadmapAccess}
+    >
       <RoadmapBoard
         roadmaps={roadmaps.map((r) => ({ id: r.id, name: r.name, description: r.description, isDefault: r.isDefault }))}
         currentRoadmapId={currentRoadmap?.id ?? ""}
@@ -61,6 +69,7 @@ export default async function RoadmapPage({
           categoryId: m.categoryId,
           sortOrder: m.sortOrder,
         }))}
+        canEdit={canEdit}
       />
     </Shell>
   );
