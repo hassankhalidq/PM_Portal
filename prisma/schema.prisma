@@ -75,8 +75,8 @@ model User {
   // Section-level access, independent of role. Ignored for SUPER_ADMIN.
   projectAccess  AccessLevel  @default(EDIT)
   roadmapAccess  AccessLevel  @default(EDIT)
-  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  orgId          String?
+  organization   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId          String
   comments       Comment[]
   createdAt      DateTime     @default(now())
 
@@ -92,8 +92,8 @@ model Board {
   name           String
   description    String         @default("")
   isDefault      Boolean        @default(false)
-  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  orgId          String?
+  organization   Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId          String
   createdAt      DateTime       @default(now())
   nodes          ProjectNode[]
   weeklyStatuses WeeklyStatus[]
@@ -224,8 +224,8 @@ model Roadmap {
   description String        @default("")
   theme       String        @default("indigo")
   isDefault   Boolean       @default(false)
-  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  orgId       String?
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId       String
   createdAt   DateTime      @default(now())
   categories  Category[]
   milestones  Milestone[]
