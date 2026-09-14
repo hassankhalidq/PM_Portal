@@ -10,21 +10,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Credentials({
       name: "Email and password",
       credentials: {
-        org: { label: "Organization", type: "text" },
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const orgSlug = String(credentials?.org ?? "").toLowerCase().trim();
         const email = String(credentials?.email ?? "").toLowerCase().trim();
         const password = String(credentials?.password ?? "");
-        if (!orgSlug || !email || !password) return null;
+        if (!email || !password) return null;
 
-        const organization = await prisma.organization.findUnique({ where: { slug: orgSlug } });
-        if (!organization) return null;
-
+        // Email is globally unique, so the org comes along for free with
+        // the account itself -- no separate org step for the person logging in.
         const user = await prisma.user.findUnique({
-          where: { orgId_email: { orgId: organization.id, email } },
+          where: { email },
+          include: { organization: { select: { slug: true } } },
         });
         if (!user) return null;
         const ok = await compare(password, user.passwordHash);
@@ -35,7 +33,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           name: user.name,
           role: user.role,
           orgId: user.orgId,
-          orgSlug: organization.slug,
+          orgSlug: user.organization.slug,
           projectAccess: user.projectAccess,
           roadmapAccess: user.roadmapAccess,
         };

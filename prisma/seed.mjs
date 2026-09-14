@@ -21,7 +21,7 @@ async function main() {
   const passwordHash = await bcrypt.hash(password, 12);
 
   await prisma.user.upsert({
-    where: { orgId_email: { orgId: org.id, email } },
+    where: { email },
     update: { role: "ADMIN" },
     create: { email, name: "Portal Admin", passwordHash, role: "ADMIN", orgId: org.id },
   });
@@ -51,7 +51,7 @@ async function main() {
     });
   }
 
-  console.log(`Seeded org "${org.name}" (${org.slug}). Login: /login?org=${org.slug} — ${email} / ${password}`);
+  console.log(`Seeded org "${org.name}". Login: ${email} / ${password}`);
   console.log("Change this password immediately.");
 }
 

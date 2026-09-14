@@ -42,9 +42,7 @@ async function main() {
   console.log(`Backfilled onto ${org.slug}: ${users.count} users, ${boards.count} boards, ${roadmaps.count} roadmaps.`);
 
   const superAdminEmail = (process.env.SUPER_ADMIN_EMAIL || "superadmin@vyro.local").toLowerCase();
-  const existing = await prisma.user.findUnique({
-    where: { orgId_email: { orgId: org.id, email: superAdminEmail } },
-  });
+  const existing = await prisma.user.findUnique({ where: { email: superAdminEmail } });
   if (existing) {
     if (existing.role !== "SUPER_ADMIN") {
       await prisma.user.update({ where: { id: existing.id }, data: { role: "SUPER_ADMIN" } });
@@ -66,7 +64,6 @@ async function main() {
     });
     console.log("---");
     console.log("SUPER_ADMIN account created:");
-    console.log(`  Login link: /login?org=${org.slug}`);
     console.log(`  Email:      ${superAdminEmail}`);
     console.log(`  Password:   ${password}`);
     console.log("Change this password after first login.");

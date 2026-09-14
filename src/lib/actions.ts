@@ -116,13 +116,12 @@ async function assertCategoryInOrg(categoryId: string, ctx: SessionCtx) {
 export async function login(_prev: string | undefined, formData: FormData) {
   try {
     await signIn("credentials", {
-      org: formData.get("org"),
       email: formData.get("email"),
       password: formData.get("password"),
       redirectTo: "/projects",
     });
   } catch (error) {
-    if (error instanceof AuthError) return "Invalid organization, email, or password.";
+    if (error instanceof AuthError) return "Invalid email or password.";
     throw error;
   }
 }
@@ -980,8 +979,8 @@ export async function createUser(data: {
   const name = data.name.trim();
   if (!email || !name) throw new Error("Email and name are required.");
   if (data.password.length < 8) throw new Error("Password must be at least 8 characters.");
-  const existing = await prisma.user.findUnique({ where: { orgId_email: { orgId: targetOrgId, email } } });
-  if (existing) throw new Error("A user with that email already exists in this organization.");
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) throw new Error("A user with that email already exists.");
   const passwordHash = await hash(data.password, 12);
   await prisma.user.create({
     data: {

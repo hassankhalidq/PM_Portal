@@ -200,7 +200,7 @@ export default function UsersBoard({
             <NewOrgForm
               onDone={() => setAddingOrg(false)}
               onError={setError}
-              onCreated={(slug) => setNotice(`Created. Their login link: /login?org=${slug}`)}
+              onCreated={(name) => setNotice(`Created "${name}". Add its first user with "Add user" above.`)}
             />
           </div>
         </div>
@@ -635,7 +635,7 @@ function NewOrgForm({
 }: {
   onDone: () => void;
   onError: (s: string) => void;
-  onCreated: (slug: string) => void;
+  onCreated: (name: string) => void;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -649,10 +649,10 @@ function NewOrgForm({
     onError("");
     start(async () => {
       try {
-        const { slug: created } = await createOrganization(name, slug);
+        await createOrganization(name, slug);
         router.refresh();
         onDone();
-        onCreated(created);
+        onCreated(name);
       } catch (err) {
         onError(err instanceof Error ? err.message : "Failed to create organization.");
       }
@@ -697,7 +697,7 @@ function NewOrgForm({
             }}
           />
           <p className="mt-1 text-xs text-text-muted">
-            Their login link will be <span className="font-mono">/login?org={slug || "…"}</span>
+            Internal identifier only — people log in with just their email and password.
           </p>
         </div>
         <p className="text-xs text-text-muted">Starts empty — a default board and roadmap, no data copied from any other org.</p>

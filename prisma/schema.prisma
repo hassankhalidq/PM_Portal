@@ -68,7 +68,11 @@ model Organization {
 
 model User {
   id             String       @id @default(cuid())
-  email          String
+  // Globally unique, not per-org: login is just email + password, and the
+  // org is resolved from whichever account that email belongs to. Someone
+  // needing two separate accounts across two companies isn't a real need
+  // right now; if it ever is, this is the field to revisit.
+  email          String       @unique
   name           String
   passwordHash   String
   role           Role         @default(INTERNAL)
@@ -80,10 +84,6 @@ model User {
   comments       Comment[]
   createdAt      DateTime     @default(now())
 
-  // Email is unique per org, not globally — the same person's email can
-  // exist as separate accounts in separate companies. Login resolves the
-  // org first (from the login link/picker), then looks up by [orgId, email].
-  @@unique([orgId, email])
   @@index([orgId])
 }
 

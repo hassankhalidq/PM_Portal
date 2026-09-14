@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import LoginForm from "./LoginForm";
 
 export default function LoginPage() {
@@ -11,9 +10,7 @@ export default function LoginPage() {
         </div>
         <div className="rounded-2xl border border-border bg-surface p-6 shadow-sm">
           <h1 className="mb-4 text-lg font-semibold">Sign in</h1>
-          <Suspense fallback={null}>
-            <LoginForm />
-          </Suspense>
+          <LoginForm />
         </div>
         <p className="mt-4 text-center text-xs text-text-muted">
           Internal tool. Accounts are created by an administrator.
